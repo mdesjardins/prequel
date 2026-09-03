@@ -7,11 +7,18 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 
-const DIR = path.join(os.homedir(), '.prequel');
+export const prequelHome = () => process.env.PREQUEL_HOME || path.join(os.homedir(), '.prequel');
+
+export async function writeJsonAtomic(dest, data) {
+  await fs.mkdir(path.dirname(dest), { recursive: true });
+  const tmp = `${dest}.${process.pid}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(data, null, 2));
+  await fs.rename(tmp, dest);
+}
 
 function fileFor(repoRoot) {
   const hash = crypto.createHash('sha1').update(repoRoot).digest('hex').slice(0, 16);
-  return path.join(DIR, `${hash}.json`);
+  return path.join(prequelHome(), `${hash}.json`);
 }
 
 async function readAll(repoRoot) {
@@ -24,13 +31,7 @@ async function readAll(repoRoot) {
   }
 }
 
-async function writeAll(repoRoot, comments) {
-  await fs.mkdir(DIR, { recursive: true });
-  const dest = fileFor(repoRoot);
-  const tmp = `${dest}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify({ repoRoot, comments }, null, 2));
-  await fs.rename(tmp, dest);
-}
+const writeAll = (repoRoot, comments) => writeJsonAtomic(fileFor(repoRoot), { repoRoot, comments });
 
 export async function listComments(repoRoot, branch) {
   const all = await readAll(repoRoot);

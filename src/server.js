@@ -25,7 +25,9 @@ import {
   clearComments,
   restoreCleared,
 } from './comments/commentStore.js';
+import { listSavedReplies, addSavedReply, deleteSavedReply } from './comments/savedReplies.js';
 import { buildMarkdown, buildJson } from './export/claudeExport.js';
+import crypto from 'node:crypto';
 import { marked } from 'marked';
 
 marked.setOptions({ breaks: true });
@@ -84,6 +86,25 @@ function safeRelPath(raw) {
 
 const isBinaryText = (text) => text.slice(0, 8192).includes('\0');
 
+const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+const ATTACHMENT_NAME = /^[a-f0-9]{16,}\.(png|jpe?g|gif|webp)$/;
+
+function matchesMagic(buf, type) {
+  const startsWith = (bytes, at = 0) => bytes.every((b, i) => buf[at + i] === b);
+  switch (type) {
+    case 'image/png':
+      return startsWith([0x89, 0x50, 0x4e, 0x47]);
+    case 'image/jpeg':
+      return startsWith([0xff, 0xd8, 0xff]);
+    case 'image/gif':
+      return buf.subarray(0, 4).toString('latin1') === 'GIF8';
+    case 'image/webp':
+      return buf.subarray(0, 4).toString('latin1') === 'RIFF' && buf.subarray(8, 12).toString('latin1') === 'WEBP';
+    default:
+      return false;
+  }
+}
+
 export function createServer({ repoRoot = null, defaultBase = null } = {}) {
   const app = express();
 
@@ -95,7 +116,8 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
   app.set('view engine', 'ejs');
   app.set('views', path.join(projectRoot, 'views'));
 
-  app.use(express.json({ limit: '1mb' }));
+  const json1mb = express.json({ limit: '1mb' });
+  app.use((req, res, next) => (req.path === '/api/attachments' ? next() : json1mb(req, res, next)));
   app.use('/static', express.static(path.join(projectRoot, 'public')));
   app.use(
     '/vendor/primer',
@@ -417,6 +439,58 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
       return res.status(500).json({ error: err.message });
     }
     res.json({ count: comments.length, content, path: path.join('.prequel', filename) });
+  });
+
+  app.get('/api/saved-replies', async (req, res) => {
+    res.json({ replies: await listSavedReplies() });
+  });
+
+  app.post('/api/saved-replies', async (req, res) => {
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const body = typeof req.body?.body === 'string' ? req.body.body.trim() : '';
+    if (!name || !body) return res.status(400).json({ error: 'name and body required' });
+    res.json({ reply: await addSavedReply({ name, body }) });
+  });
+
+  app.delete('/api/saved-replies/:id', async (req, res) => {
+    if (!(await deleteSavedReply(req.params.id))) return res.status(404).json({ error: 'not found' });
+    res.json({ ok: true });
+  });
+
+  const attachmentsDir = () => path.join(repoRoot, '.prequel', 'attachments');
+  const attachmentJson = express.json({ limit: '15mb' });
+  const attachmentJsonError = (err, req, res, next) => {
+    if (err?.type === 'entity.too.large') return res.status(400).json({ error: 'too large' });
+    next(err);
+  };
+
+  app.post('/api/attachments', attachmentJson, attachmentJsonError, async (req, res) => {
+    if (!repoRoot) return res.status(400).json({ error: 'no repo' });
+    const { name, type, data } = req.body || {};
+    const ext = IMAGE_EXT[type];
+    if (!ext || typeof data !== 'string') return res.status(400).json({ error: 'unsupported type' });
+    const buf = Buffer.from(data, 'base64');
+    if (!buf.length || !matchesMagic(buf, type)) return res.status(400).json({ error: 'bad image data' });
+    const file = `${crypto.randomBytes(8).toString('hex')}.${ext}`;
+    try {
+      await fs.mkdir(attachmentsDir(), { recursive: true });
+      await fs.writeFile(path.join(attachmentsDir(), file), buf);
+      await ensureExcluded(repoRoot);
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    res.json({
+      url: `/attachments/${file}`,
+      path: path.posix.join('.prequel', 'attachments', file),
+      name: typeof name === 'string' ? name : file,
+    });
+  });
+
+  app.get('/attachments/:file', (req, res) => {
+    if (!repoRoot || !ATTACHMENT_NAME.test(req.params.file)) return res.status(404).send('not found');
+    res.sendFile(req.params.file, { root: attachmentsDir() }, (err) => {
+      if (err && !res.headersSent) res.status(404).send('not found');
+    });
   });
 
   // Identifies this server and the repo it serves, so a client scanning ports
