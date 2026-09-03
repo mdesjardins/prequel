@@ -2,21 +2,18 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { createFixtureRepo } from './helpers/fixture-repo.js';
-import { createServer } from '../src/server.js';
+import http from 'node:http';
+import { createFixtureRepo, startServer } from './helpers/fixture-repo.js';
 
 const fx = await createFixtureRepo();
 await fs.writeFile(
   path.join(fx.dir, 'big.js'),
   Array.from({ length: 6000 }, (_, i) => `const v${i} = ${i};`).join('\n') + '\n'
 );
-const app = createServer({ repoRoot: fx.dir, defaultBase: 'main' });
-const srv = await new Promise((r) => {
-  const s = app.listen(0, '127.0.0.1', () => r(s));
-});
+const { srv, close } = await startServer(fx);
 const url = (p, q = '') => `http://127.0.0.1:${srv.address().port}/file/${p}${q}`;
 after(async () => {
-  await new Promise((r) => srv.close(r));
+  await close();
   await fx.cleanup();
 });
 
@@ -122,4 +119,30 @@ test('page shell: back link, escaped crumbs, tree, comments flag', async () => {
   const evil = (await get('%3Cimg%20src%3Dx%20onerror%3D1%3E/x.js', '?diff=working')).body;
   assert.ok(!evil.includes('<img src=x onerror=1>'));
   assert.ok(evil.includes('&lt;img src=x onerror=1&gt;'));
+});
+
+test('raw request with a literal .. segment is rejected by the route', async () => {
+  const res = await new Promise((resolve, reject) => {
+    http
+      .get({ host: '127.0.0.1', port: srv.address().port, path: '/file/../etc/passwd' }, (r) => {
+        let body = '';
+        r.on('data', (d) => (body += d));
+        r.on('end', () => resolve({ status: r.statusCode, body }));
+      })
+      .on('error', reject);
+  });
+  assert.equal(res.status, 404);
+  assert.equal(res.body, 'not found');
+});
+
+test('flag-like base ref is ignored and never reaches git', async () => {
+  const out = path.join(fx.dir, 'pwned.txt');
+  const res = await get('README.md', `?diff=branch&base=${encodeURIComponent('--output=' + out)}`);
+  assert.equal(res.status, 200);
+  await assert.rejects(fs.stat(out));
+  assert.ok(!res.body.includes('base=--output'));
+});
+
+test('directory path at a revision is not a file', async () => {
+  assert.equal((await get('src', '?diff=branch')).status, 404);
 });

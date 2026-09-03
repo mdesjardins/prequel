@@ -15,6 +15,15 @@ export function git(dir, args) {
 }
 
 const write = (dir, rel, content) => fs.writeFile(path.join(dir, rel), content);
+import { createServer } from '../../src/server.js';
+
+export async function startServer(fx, opts = {}) {
+  const app = createServer({ repoRoot: fx.dir, defaultBase: 'main', ...opts });
+  const srv = await new Promise((r) => {
+    const s = app.listen(0, '127.0.0.1', () => r(s));
+  });
+  return { srv, port: srv.address().port, close: () => new Promise((r) => srv.close(r)) };
+}
 
 export async function createFixtureRepo() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'prequel-fixture-'));

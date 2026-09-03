@@ -67,11 +67,11 @@ function pageParams(query, defaultBase) {
   const view = query.view === 'unified' ? 'unified' : 'split';
   const colorMode = ['light', 'dark'].includes(query.mode) ? query.mode : 'auto';
   const diffMode = DIFF_MODES.includes(query.diff) ? query.diff : 'working';
-  const requestedBase =
-    (typeof query.base === 'string' && query.base ? query.base : null) || defaultBase;
+  const rawBase = typeof query.base === 'string' && query.base && !query.base.startsWith('-') ? query.base : null;
+  const requestedBase = rawBase || defaultBase;
   const qs = new URLSearchParams({ view, diff: diffMode });
   if (colorMode !== 'auto') qs.set('mode', colorMode);
-  if (typeof query.base === 'string' && query.base) qs.set('base', query.base);
+  if (rawBase) qs.set('base', rawBase);
   return { view, colorMode, diffMode, requestedBase, query: qs.toString() };
 }
 
@@ -133,7 +133,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     await highlightDiff(diff); // attaches per-line highlighted HTML in place
     // Which revision the "new" side comes from, for context expansion:
     // branch mode diffs against HEAD; all/working show the working tree.
-    const rev = repoRoot && diffMode === 'branch' ? 'HEAD' : 'WORKTREE';
+    const rev = !repoRoot ? null : diffMode === 'branch' ? 'HEAD' : 'WORKTREE';
     if (repoRoot) {
       await Promise.all(
         diff.files
@@ -173,7 +173,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     try {
       result = await loadDiff(diffMode, requestedBase);
     } catch (err) {
-      return res.status(500).send(err.message);
+      return res.status(500).type('text/plain').send(err.message);
     }
     const { diff, head, base, baseRev } = result;
     const file = diff.files.find((f) => f.newPath === filePath || f.oldPath === filePath);

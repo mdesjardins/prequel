@@ -62,7 +62,10 @@ export async function getHead(repoRoot) {
   return sha || 'HEAD';
 }
 
+const badRef = (ref) => typeof ref !== 'string' || !ref || ref.startsWith('-');
+
 async function mergeBase(repoRoot, base) {
+  if (badRef(base)) throw new Error(`invalid base ref: ${base}`);
   try {
     return (await git(repoRoot, ['merge-base', base, 'HEAD'])).trim();
   } catch {
@@ -132,7 +135,7 @@ export async function getBlobText(repoRoot, { rev, path: filePath }) {
     if (!abs) return '';
     return fs.readFile(abs, 'utf8').catch(() => '');
   }
-  return git(repoRoot, ['show', `${rev}:${filePath}`]).catch(() => '');
+  return git(repoRoot, ['cat-file', 'blob', `${rev}:${filePath}`]).catch(() => '');
 }
 
 export async function blobExists(repoRoot, { rev, path: filePath }) {
@@ -144,8 +147,8 @@ export async function blobExists(repoRoot, { rev, path: filePath }) {
       .then((st) => st.isFile())
       .catch(() => false);
   }
-  return git(repoRoot, ['cat-file', '-e', `${rev}:${filePath}`])
-    .then(() => true)
+  return git(repoRoot, ['cat-file', '-t', `${rev}:${filePath}`])
+    .then((t) => t.trim() === 'blob')
     .catch(() => false);
 }
 

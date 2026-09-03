@@ -2,18 +2,14 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { createFixtureRepo } from './helpers/fixture-repo.js';
-import { createServer } from '../src/server.js';
+import { createFixtureRepo, startServer } from './helpers/fixture-repo.js';
 
 const fx = await createFixtureRepo();
 await fs.writeFile(
   path.join(fx.dir, 'big.js'),
   Array.from({ length: 6000 }, (_, i) => `const v${i} = ${i};`).join('\n') + '\n'
 );
-const app = createServer({ repoRoot: fx.dir, defaultBase: 'main' });
-const srv = await new Promise((r) => {
-  const s = app.listen(0, '127.0.0.1', () => r(s));
-});
+const { srv, close } = await startServer(fx);
 const ctx = async (start, end) => {
   const res = await fetch(
     `http://127.0.0.1:${srv.address().port}/api/context?path=big.js&rev=WORKTREE&start=${start}&end=${end}`
@@ -21,7 +17,7 @@ const ctx = async (start, end) => {
   return res.json();
 };
 after(async () => {
-  await new Promise((r) => srv.close(r));
+  await close();
   await fx.cleanup();
 });
 

@@ -279,6 +279,7 @@
         container.outerHTML = fileCommentHtml(comment);
       } else {
         const isSplit = isSplitTable(container.closest('table'));
+        rendered.set(comment.id, { c: comment, replies: [] });
         container.insertAdjacentHTML('afterend', commentRowHtml(comment, isSplit));
         container.remove();
       }
@@ -332,6 +333,7 @@
 
   // Repaint a root card in place so its pill and Resolve/Reopen label match.
   function applyStatus(c) {
+    trackStatus(c);
     const card = document.querySelector(`.comment[data-comment-id="${CSS.escape(c.id)}"]`);
     if (!card) return;
     const thread = card.closest('.comment-thread');
@@ -353,6 +355,7 @@
       });
       const { comment } = await res.json();
       form.closest('.comment-reply-compose').remove();
+      trackReply(comment);
       thread.insertAdjacentHTML('beforeend', commentCardHtml(comment, { isRoot: false }));
     } catch {
       form.querySelectorAll('button').forEach((b) => (b.disabled = false));
@@ -362,6 +365,22 @@
   // --- load, export, clear ----------------------------------------------
   const pending = new Map();
   const rendered = new Map();
+
+  function trackReply(r) {
+    rendered.get(r.parentId)?.replies.push(r);
+  }
+
+  function trackStatus(c) {
+    const entry = rendered.get(c.id);
+    if (entry) {
+      entry.c = c;
+      return;
+    }
+    for (const e of rendered.values()) {
+      const i = e.replies.findIndex((r) => r.id === c.id);
+      if (i >= 0) e.replies[i] = c;
+    }
+  }
 
   function renderComment(c, replies, { reveal = true } = {}) {
     rendered.set(c.id, { c, replies });
@@ -626,6 +645,7 @@
             `.comment-thread[data-root-id="${CSS.escape(c.parentId)}"]`
           );
           if (!thread || thread.querySelector(`.comment[data-comment-id="${CSS.escape(c.id)}"]`)) return;
+          trackReply(c);
           const compose = thread.querySelector('.comment-reply-compose');
           const html = commentCardHtml(c, { isRoot: false });
           if (compose) compose.insertAdjacentHTML('beforebegin', html);
@@ -676,7 +696,7 @@
   }
 
   document.addEventListener('prequel:context-loaded', (e) => {
-    for (const row of document.querySelectorAll('.comment-row[data-file-path]')) {
+    for (const row of document.querySelectorAll('.comment-row[data-root-id][data-file-path]')) {
       const { filePath, side, line, rootId } = row.dataset;
       if (filePath !== e.detail.filePath || findAnchorCell(filePath, side, line)) continue;
       const entry = rendered.get(rootId);

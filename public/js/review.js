@@ -108,7 +108,7 @@ function syncExpandAll(file) {
   const open = visibleBoundaries(file).length > 0;
   const loaded = file.querySelector('tr.context-loaded');
   btn.disabled = !open && !loaded;
-  btn.textContent = open ? 'Expand all' : 'Collapse';
+  btn.textContent = !open && loaded ? 'Collapse' : 'Expand all';
 }
 
 document.querySelectorAll('.file').forEach(syncExpandAll);
@@ -150,6 +150,7 @@ async function expandBoundary(row, dir) {
       `/api/context?path=${encodeURIComponent(path)}&rev=${rev}&start=${from}&end=${to}`
     );
     const data = await res.json();
+    if (!res.ok || data.error) return;
     const lines = data.lines || [];
     const html = lines
       .map((content, i) => {
