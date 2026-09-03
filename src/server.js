@@ -4,6 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import {
   binaryNotice,
+  escapeHtml,
   renderDiff,
   renderFileHtml,
   renderFileTree,
@@ -33,6 +34,8 @@ import {
   deleteComment,
   clearComments,
   restoreCleared,
+  withLock,
+  writeFileAtomic,
 } from './comments/commentStore.js';
 import { listSavedReplies, addSavedReply, deleteSavedReply } from './comments/savedReplies.js';
 import { buildMarkdown, buildJson } from './export/claudeExport.js';
@@ -40,19 +43,34 @@ import crypto from 'node:crypto';
 import { marked } from 'marked';
 import { parseSuggestions, renderSuggestionBlock } from './render/suggestion.js';
 
-const escapeHtml = (s) =>
-  String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
 marked.setOptions({ breaks: true });
 
 const MENTION = /(^|[^\w@])@agent(?![\w-])/g;
 
 // A fresh renderer per parse: raw HTML is escaped, task items become enabled
 // indexed checkboxes, and @agent becomes a mention.
+const ENTITY = /&#(x[0-9a-f]+|\d+);?|&colon;/gi;
+const SCHEME = /^([a-z][a-z0-9+.-]*):/;
+const SAFE_SCHEMES = new Set(['http', 'https', 'mailto']);
+
+function safeHref(href) {
+  const h = String(href || '')
+    .replace(ENTITY, (m, n) =>
+      n === undefined ? ':' : String.fromCodePoint(/^x/i.test(n) ? parseInt(n.slice(1), 16) : Number(n)))
+    .replace(/[\s\u0000-\u001f]/g, '')
+    .toLowerCase();
+  const m = SCHEME.exec(h);
+  return !m || SAFE_SCHEMES.has(m[1]);
+}
+
 function commentRenderer() {
   const r = new marked.Renderer();
+  const link = r.link.bind(r);
+  const image = r.image.bind(r);
   let task = 0;
   r.html = (html) => escapeHtml(html);
+  r.link = (href, title, text) => (safeHref(href) ? link(href, title, text) : text);
+  r.image = (href, title, text) => (safeHref(href) ? image(href, title, text) : escapeHtml(text));
   r.checkbox = (checked) =>
     `<input type="checkbox" class="task-item" data-task-index="${task++}"${checked ? ' checked' : ''}>`;
   r.text = (text) => text.replace(MENTION, '$1<span class="mention mention-agent">@agent</span>');
@@ -63,7 +81,7 @@ export function renderMarkdown(body) {
   return marked.parse(body || '', { renderer: commentRenderer() });
 }
 
-const TASK = /^(\s*(?:[-*+]|\d+[.)])\s+\[)( |x|X)(\])/;
+const TASK = /^((?:\s*>)*\s*(?:[-*+]|\d+[.)])\s+\[)( |x|X)(\])/;
 
 // Rewrite the nth task marker (source order, fences skipped); null when absent.
 export function toggleTask(body, idx, checked) {
@@ -87,8 +105,8 @@ const isLineRoot = (c) => c && c.side !== 'file' && !c.parentId;
 
 const stripCode = (body) => String(body || '').replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
 const hasMention = (body) => new RegExp(MENTION.source).test(stripCode(body));
-export const kindOf = (c) => {
-  if (isLineRoot(c) && c.side === 'new' && parseSuggestions(c.body).length) return 'suggestion';
+export const kindOf = (c, sugs) => {
+  if (isLineRoot(c) && c.side === 'new' && (sugs || parseSuggestions(c.body)).length) return 'suggestion';
   if (hasMention(c.body)) return 'question';
   return 'comment';
 };
@@ -99,11 +117,13 @@ export function renderCommentHtml(
   c,
   { snapshot = [], applicable = null, handoff = null, applied = false } = {}
 ) {
-  if (!isLineRoot(c)) return renderMarkdown(c.body);
+  if (!isLineRoot(c) || c.side !== 'new') return renderMarkdown(c.body);
   const renderer = commentRenderer();
   const base = renderer.code.bind(renderer);
+  let seen = false;
   renderer.code = (code, lang, escaped) => {
-    if ((lang || '').trim() !== 'suggestion') return base(code, lang, escaped);
+    if ((lang || '').trim() !== 'suggestion' || seen) return base(code, lang, escaped);
+    seen = true;
     const added = code === '' ? [] : code.split(/\r?\n/);
     return renderSuggestionBlock({ removed: snapshot, added, applicable, handoff, applied, id: c.id });
   };
@@ -121,7 +141,7 @@ function decorator(repoRoot) {
       files.set(
         c.filePath,
         getBlobText(repoRoot, { rev: 'WORKTREE', path: c.filePath })
-          .then((t) => splitLines(t))
+          .then((t) => splitLines(t).map((l) => l.replace(/\r$/, '')))
           .catch(() => [])
       );
     }
@@ -129,8 +149,10 @@ function decorator(repoRoot) {
     return all.slice(c.startLine - 1, c.endLine);
   };
   return async (c) => {
-    const sug = isLineRoot(c) ? parseSuggestions(c.body)[0] || null : null;
-    if (!sug) return { ...c, kind: kindOf(c), bodyHtml: renderCommentHtml(c), suggestion: null, applicable: null };
+    const sugs = isLineRoot(c) && c.side === 'new' ? parseSuggestions(c.body) : [];
+    const sug = sugs[0] || null;
+    const kind = kindOf(c, sugs);
+    if (!sug) return { ...c, kind, bodyHtml: renderCommentHtml(c), suggestion: null, applicable: null };
     const snapshot = Array.isArray(c.lineSnapshot) ? c.lineSnapshot : [];
     const cur = repoRoot && safeRelPath(c.filePath) ? await linesOf(c) : [];
     const applicable = snapshot.length > 0 && sameLines(cur, snapshot);
@@ -142,7 +164,7 @@ function decorator(repoRoot) {
         handoff: c.handoff || null,
         applied: Boolean(c.applied),
       }),
-      kind: kindOf(c),
+      kind,
       suggestion: { lines: sug.lines },
       applicable,
       handoff: c.handoff || null,
@@ -245,7 +267,11 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
 
   // Writes a suggestion into the working tree when the snapshot still matches.
   // Returns { status, body } shaped like the HTTP response.
-  async function applySuggestion(c) {
+  const applySuggestion = (id) => withLock(`apply:${repoRoot}`, () => applyLocked(id));
+
+  async function applyLocked(id) {
+    const c = await getComment(repoRoot, id);
+    if (!c) return { status: 404, body: { error: 'not found' } };
     if (!isLineRoot(c) || c.side !== 'new') return { status: 400, body: { error: 'not a new-side line comment' } };
     const sug = parseSuggestions(c.body)[0];
     if (!sug) return { status: 400, body: { error: 'no suggestion' } };
@@ -253,6 +279,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     const abs = rel && insideRepo(repoRoot, rel);
     if (!abs) return { status: 400, body: { error: 'invalid path' } };
     if (c.applied) return { status: 409, body: { error: 'already applied', outdated: true } };
+    if (c.handoff === 'agent') return { status: 409, body: { error: 'handed off to agent', outdated: true } };
     let text;
     try {
       text = await fs.readFile(abs, 'utf8');
@@ -267,9 +294,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     if (!snapshot.length || !sameLines(cur, snapshot)) return { status: 409, body: { error: 'outdated', outdated: true } };
     const next = [...all.slice(0, c.startLine - 1), ...sug.lines, ...all.slice(c.endLine)];
     const out = next.join(nl) + (trailing ? nl : '');
-    const tmp = `${abs}.prequel-${process.pid}-${Date.now()}.tmp`;
-    await fs.writeFile(tmp, out);
-    await fs.rename(tmp, abs);
+    await writeFileAtomic(abs, out);
     const comment = await updateComment(repoRoot, c.id, {
       status: 'resolved',
       applied: { at: new Date().toISOString(), lines: sug.lines },
@@ -281,6 +306,12 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
   app.set('views', path.join(projectRoot, 'views'));
 
   const json1mb = express.json({ limit: '1mb' });
+  app.use('/api', (req, res, next) => {
+    if (req.method === 'GET' || req.method === 'HEAD') return next();
+    const origin = req.get('origin');
+    if (!origin || origin === `${req.protocol}://${req.get('host')}`) return next();
+    res.status(403).json({ error: 'cross-origin request rejected' });
+  });
   app.use((req, res, next) => (req.path === '/api/attachments' ? next() : json1mb(req, res, next)));
   app.use('/static', express.static(path.join(projectRoot, 'public')));
   app.use(
@@ -582,9 +613,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
 
   app.post('/api/comments/:id/apply', async (req, res) => {
     if (!repoRoot) return res.status(400).json({ error: 'no repo' });
-    const c = await getComment(repoRoot, req.params.id);
-    if (!c) return res.status(404).json({ error: 'not found' });
-    const r = await applySuggestion(c);
+    const r = await applySuggestion(req.params.id);
     if (r.status !== 200) return res.status(r.status).json(r.body);
     const out = await decorator(repoRoot)(r.body.comment);
     emit('comment.updated', { comment: out }, req);
@@ -606,14 +635,15 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     const skipped = [];
     const changed = new Set();
     for (const c of candidates) {
-      const r = await applySuggestion(c);
+      const r = await applySuggestion(c.id);
       if (r.status !== 200) {
         skipped.push({ id: c.id, reason: r.body.outdated ? 'outdated' : r.body.error });
         continue;
       }
-      applied.push(c.id);
+      const out = await decorator(repoRoot)(r.body.comment);
+      applied.push(out);
       changed.add(r.path);
-      emit('comment.updated', { comment: await decorator(repoRoot)(r.body.comment) }, req);
+      emit('comment.updated', { comment: out }, req);
     }
     for (const p of changed) emit('diff.changed', { path: p }, req);
     res.json({ applied, skipped });

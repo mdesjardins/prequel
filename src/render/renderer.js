@@ -3,7 +3,7 @@
 // Phase 0: structure + classes only (no syntax highlighting yet — that's Shiki
 // in Phase 1). The DOM/class semantics mirror GitHub so the CSS can match.
 
-function escapeHtml(s) {
+export function escapeHtml(s) {
   return String(s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')

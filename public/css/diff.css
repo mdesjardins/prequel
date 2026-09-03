@@ -1234,6 +1234,7 @@ body {
   margin: 0 0 6px;
 }
 .composer-bar {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
@@ -1312,12 +1313,6 @@ body {
   font-size: 11px;
   color: var(--fgColor-muted, #59636e);
   align-self: center;
-}
-.composer-saved-menu {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 6px 0;
 }
 .composer-saved-item {
   font: inherit;
@@ -1419,9 +1414,6 @@ body {
   border-radius: 10px;
   padding: 0 6px;
   font-weight: 600;
-/* --- composer: saved replies popover, image attachments ------------------ */
-.composer-bar {
-  position: relative;
 }
 .composer-saved-menu {
   position: absolute;

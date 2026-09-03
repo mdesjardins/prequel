@@ -67,6 +67,18 @@ test('markdown export marks questions and renders suggestion blocks with notes',
   assert.match(content, /Queued for agent/);
 });
 
+test('fence markers with trailing whitespace are stripped from exported prose', async () => {
+  const { comment: c } = await post({
+    filePath: FILE, side: 'new', startLine: 3, endLine: 3, lineSnapshot: [all[2]],
+    body: 'Trim this.\n\n```suggestion  \nconst trimmed = true;\n```  ',
+  });
+  assert.equal(c.kind, 'suggestion');
+  const { content } = await exportAs('md');
+  assert.equal(content.split('const trimmed = true;').length - 1, 1);
+  assert.match(content, /> Trim this\.\n/);
+  assert.ok(!content.includes('> ```suggestion'));
+});
+
 test('task list items stay verbatim in markdown export', async () => {
   const { content } = await exportAs('md');
   assert.match(content, /> - \[ \] rename\n> - \[x\] add test/);
@@ -78,4 +90,18 @@ test('attachment urls are rewritten to repo-relative paths in both formats', asy
   assert.ok(!md.includes('](/attachments/'));
   const item = JSON.parse((await exportAs('json')).content).find((c) => c.id === tasks.id);
   assert.match(item.comment, /\.prequel\/attachments\/abc123def456abcd\.png/);
+});
+
+test('markdown export notes applied and outdated suggestions', async () => {
+  const cur = await lines();
+  const { comment: done } = await post({
+    filePath: FILE, side: 'new', startLine: 8, endLine: 8, lineSnapshot: [cur[7]], body: '```suggestion\n// done\n```',
+  });
+  assert.equal((await json('POST', `/api/comments/${done.id}/apply`)).status, 200);
+  await post({
+    filePath: FILE, side: 'new', startLine: 10, endLine: 10, lineSnapshot: ['not what is there'], body: '```suggestion\n// nope\n```',
+  });
+  const { content } = await exportAs('md');
+  assert.match(content, /Already applied\./);
+  assert.match(content, /Outdated: the lines changed since this was written; adapt the intent\./);
 });

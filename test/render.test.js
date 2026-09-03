@@ -70,3 +70,49 @@ test('@agent renders as a mention outside code', async () => {
   const { comment: c2 } = await post('@agentless and `@agent` and\n\n```\n@agent\n```');
   assert.doesNotMatch(c2.bodyHtml, /mention-agent/);
 });
+
+test('javascript: and data: links or images are neutralized', async () => {
+  const { comment } = await post(
+    '[a](javascript:alert(1)) [b](JAVA\tSCRIPT:x) [c](javascript&#58;y) ![d](data:text/html,x) [ok](https://e.com) ![p](/attachments/x.png)',
+  );
+  assert.doesNotMatch(comment.bodyHtml, /javascript/i);
+  assert.doesNotMatch(comment.bodyHtml, /data:/i);
+  assert.match(comment.bodyHtml, /<a href="https:\/\/e\.com">ok<\/a>/);
+  assert.match(comment.bodyHtml, /<img src="\/attachments\/x\.png"/);
+  assert.match(comment.bodyHtml, /\ba\b.*\bb\b.*\bc\b.*\bd\b/);
+});
+
+test('cross-origin mutating API requests are rejected', async () => {
+  const res = await fetch(`${base()}/api/comments`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: 'http://evil.example' },
+    body: JSON.stringify({ filePath: 'README.md', side: 'file', startLine: 0, body: 'x' }),
+  });
+  assert.equal(res.status, 403);
+  const same = await fetch(`${base()}/api/comments`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: base() },
+    body: JSON.stringify({ filePath: 'README.md', side: 'file', startLine: 0, body: 'x' }),
+  });
+  assert.equal(same.status, 200);
+  const list = await fetch(`${base()}/api/comments`, { headers: { origin: 'http://evil.example' } });
+  assert.equal(list.status, 200);
+});
+
+test('blockquoted task items keep index parity with rendered checkboxes', async () => {
+  const { comment } = await post('> - [ ] a\n\n- [ ] b\n- [x] c');
+  const boxes = comment.bodyHtml.match(/<input[^>]*class="task-item"[^>]*>/g);
+  assert.equal(boxes.length, 3);
+  await patch(comment.id, { taskIndex: 1, checked: true });
+  assert.equal((await get(comment.id)).body, '> - [ ] a\n\n- [x] b\n- [x] c');
+  await patch(comment.id, { taskIndex: 0, checked: true });
+  assert.equal((await get(comment.id)).body, '> - [x] a\n\n- [x] b\n- [x] c');
+});
+
+test('numbered-list task markers toggle by index', async () => {
+  const { comment } = await post('1. [ ] a\n2. [ ] b');
+  const boxes = comment.bodyHtml.match(/<input[^>]*class="task-item"[^>]*>/g);
+  assert.equal(boxes.length, 2);
+  await patch(comment.id, { taskIndex: 1, checked: true });
+  assert.equal((await get(comment.id)).body, '1. [ ] a\n2. [x] b');
+});

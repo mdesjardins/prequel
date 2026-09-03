@@ -106,7 +106,8 @@ test('apply-all applies applicable open suggestions and reports outdated ones', 
   const res = await json('POST', '/api/suggestions/apply-all?branch=b2');
   assert.equal(res.status, 200);
   const out = await res.json();
-  assert.deepEqual(out.applied.sort(), [a.id, c.id].sort());
+  assert.deepEqual(out.applied.map((x) => x.id).sort(), [a.id, c.id].sort());
+  assert.ok(out.applied.every((x) => x.applied && x.kind === 'suggestion'));
   assert.deepEqual(out.skipped, [{ id: b.id, reason: 'outdated' }]);
   const lines = await fileLines();
   assert.equal(lines[4], '// all a');
@@ -120,7 +121,7 @@ test('apply-all applies bottom-up so earlier growth does not shift later ranges'
   const grow = await suggest(12, 12, ['// g1', '// g2', '// g3'], { branch: 'b3' });
   const tail = await suggest(15, 15, ['// tail'], { branch: 'b3' });
   const out = await (await json('POST', '/api/suggestions/apply-all?branch=b3')).json();
-  assert.deepEqual(out.applied.sort(), [grow.id, tail.id].sort());
+  assert.deepEqual(out.applied.map((x) => x.id).sort(), [grow.id, tail.id].sort());
   const lines = await fileLines();
   assert.deepEqual(lines.slice(11, 14), ['// g1', '// g2', '// g3']);
   assert.equal(lines[14], before[12]);
@@ -150,4 +151,67 @@ test('file-diff renders one file section and 404s when absent', async () => {
   assert.doesNotMatch(html, /data-path="README.md"/);
   const missing = await fetch(`${base()}/api/file-diff?path=src/nope.js&view=unified&diff=working`);
   assert.equal(missing.status, 404);
+});
+
+test('concurrent applies to the same file both land', async () => {
+  const before = await fileLines();
+  const a = await suggest(2, 2, ['// concurrent a']);
+  const b = await suggest(4, 4, ['// concurrent b']);
+  const [ra, rb] = await Promise.all([apply(a.id), apply(b.id)]);
+  assert.equal(ra.status, 200);
+  assert.equal(rb.status, 200);
+  const after = await fileLines();
+  assert.equal(after[1], '// concurrent a');
+  assert.equal(after[3], '// concurrent b');
+  assert.equal(after.length, before.length);
+});
+
+test('apply on a comment handed off to the agent returns 409', async () => {
+  const c = await suggest(6, 6, ['// handed off']);
+  await json('PATCH', `/api/comments/${c.id}`, { handoff: 'agent' });
+  const res = await apply(c.id);
+  assert.equal(res.status, 409);
+  assert.equal((await res.json()).outdated, true);
+});
+
+test('apply when the file is missing returns 409', async () => {
+  const p = path.join(fx.dir, 'src', 'gone.js');
+  await fs.writeFile(p, 'a\nb\n');
+  const { comment } = await post({
+    filePath: 'src/gone.js', side: 'new', startLine: 1, endLine: 1, lineSnapshot: ['a'], body: fence(['z']),
+  });
+  await fs.rm(p);
+  const res = await apply(comment.id);
+  assert.equal(res.status, 409);
+  assert.equal((await res.json()).outdated, true);
+});
+
+test('old-side suggestion fences are not decorated as suggestions', async () => {
+  const { comment } = await post({
+    filePath: FILE, side: 'old', startLine: 1, endLine: 1, lineSnapshot: ['x'], body: fence(['y']),
+  });
+  assert.equal(comment.kind, 'comment');
+  assert.equal(comment.suggestion, null);
+  assert.doesNotMatch(comment.bodyHtml, /Apply now/);
+});
+
+test('apply preserves the file mode', async () => {
+  const p = path.join(fx.dir, 'src', 'run.sh');
+  await fs.writeFile(p, '#!/bin/sh\necho one\n', { mode: 0o755 });
+  const { comment } = await post({
+    filePath: 'src/run.sh', side: 'new', startLine: 2, endLine: 2, lineSnapshot: ['echo one'], body: fence(['echo two']),
+  });
+  assert.equal((await apply(comment.id)).status, 200);
+  assert.equal((await fs.stat(p)).mode & 0o777, 0o755);
+  assert.equal(await fs.readFile(p, 'utf8'), '#!/bin/sh\necho two\n');
+});
+
+test('only the first suggestion fence renders as an applicable block', async () => {
+  const all = await fileLines();
+  const { comment } = await post({
+    filePath: FILE, side: 'new', startLine: 1, endLine: 1, lineSnapshot: [all[0]],
+    body: fence(['first']) + '\n\n' + fence(['second']),
+  });
+  assert.equal(comment.bodyHtml.match(/suggestion-apply/g).length, 1);
+  assert.match(comment.bodyHtml, /<pre><code class="language-suggestion">second/);
 });

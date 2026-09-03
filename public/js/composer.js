@@ -156,11 +156,8 @@
     i: 'italic',
     e: 'code',
     k: 'link',
-    '.': 'quote',
-    '8': 'ul',
-    '7': 'ol',
-    l: 'task',
   };
+  const SHIFT_CODES = { Period: 'quote', Digit8: 'ul', Digit7: 'ol', KeyL: 'task' };
 
   // --- preview ------------------------------------------------------------
   async function showPreview(form) {
@@ -343,7 +340,7 @@
 
   async function uploadImage(form, ta, file) {
     const name = file.name || 'image';
-    const placeholder = `![Uploading ${name}…]()`;
+    const placeholder = `![Uploading ${name}…](#${Math.random().toString(36).slice(2, 8)})`;
     insertAt(ta, placeholder);
     notice(form, '');
     const swap = (text) => {
@@ -432,11 +429,8 @@
         e.preventDefault();
         return toggleSaved(form);
       }
-      const k = e.key.toLowerCase();
-      const act = KEYS[k];
+      const act = e.shiftKey ? SHIFT_CODES[e.code] : KEYS[e.key.toLowerCase()];
       if (!act) return;
-      const needsShift = ['.', '8', '7', 'l'].includes(k);
-      if (needsShift !== e.shiftKey) return;
       e.preventDefault();
       ACTIONS[act](ta);
     });

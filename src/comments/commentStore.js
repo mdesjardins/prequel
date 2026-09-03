@@ -9,11 +9,23 @@ import crypto from 'node:crypto';
 
 export const prequelHome = () => process.env.PREQUEL_HOME || path.join(os.homedir(), '.prequel');
 
-export async function writeJsonAtomic(dest, data) {
+export async function writeFileAtomic(dest, data) {
   await fs.mkdir(path.dirname(dest), { recursive: true });
   const tmp = `${dest}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(data, null, 2));
+  const mode = await fs.stat(dest).then((st) => st.mode, () => undefined);
+  await fs.writeFile(tmp, data, { mode });
   await fs.rename(tmp, dest);
+}
+
+export const writeJsonAtomic = (dest, data) => writeFileAtomic(dest, JSON.stringify(data, null, 2));
+
+export async function readJsonArray(file, key) {
+  try {
+    const data = JSON.parse(await fs.readFile(file, 'utf8'));
+    return Array.isArray(data[key]) ? data[key] : [];
+  } catch {
+    return [];
+  }
 }
 
 function fileFor(repoRoot) {
@@ -21,26 +33,20 @@ function fileFor(repoRoot) {
   return path.join(prequelHome(), `${hash}.json`);
 }
 
-async function readAll(repoRoot) {
-  try {
-    const raw = await fs.readFile(fileFor(repoRoot), 'utf8');
-    const data = JSON.parse(raw);
-    return Array.isArray(data.comments) ? data.comments : [];
-  } catch {
-    return [];
-  }
-}
+const readAll = (repoRoot) => readJsonArray(fileFor(repoRoot), 'comments');
 
 const writeAll = (repoRoot, comments) => writeJsonAtomic(fileFor(repoRoot), { repoRoot, comments });
 
 const locks = new Map();
 
-function locked(repoRoot, fn) {
-  const prev = locks.get(repoRoot) || Promise.resolve();
+export function withLock(key, fn) {
+  const prev = locks.get(key) || Promise.resolve();
   const next = prev.then(fn, fn);
-  locks.set(repoRoot, next.catch(() => {}));
+  locks.set(key, next.catch(() => {}));
   return next;
 }
+
+const locked = (repoRoot, fn) => withLock(`comments:${repoRoot}`, fn);
 
 export async function listComments(repoRoot, branch) {
   const all = await readAll(repoRoot);

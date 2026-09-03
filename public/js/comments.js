@@ -147,13 +147,9 @@
     }
   }
 
-  async function syncApplied(ids) {
-    if (!ids.length) return;
-    const res = await fetch(`/api/comments?branch=${encodeURIComponent(branch)}`);
-    const { comments } = await res.json();
+  async function syncApplied(comments) {
     const paths = new Set();
     for (const c of comments) {
-      if (!ids.includes(c.id)) continue;
       applyStatus(c);
       paths.add(c.filePath);
     }
@@ -198,6 +194,11 @@
     if (!next) return;
     next.classList.toggle('is-collapsed', wasCollapsed);
     window.prequelReview.refreshFile(next);
+    for (const [id, { c, replies }] of [...pending]) {
+      if (c.filePath !== filePath) continue;
+      pending.delete(id);
+      renderComment(c, replies);
+    }
   }
 
   // --- toast (with optional action) --------------------------------------
@@ -735,13 +736,17 @@
         const root = thread.closest('.comment-row, .file-comment');
         Object.assign(compose.querySelector('.comment-compose').dataset, {
           filePath: root?.dataset.filePath || '',
-          side: root?.dataset.side || '',
-          startLine: root?.dataset.line || '0',
-          endLine: root?.dataset.line || '0',
+          side: 'reply',
+          startLine: '0',
+          endLine: '0',
         });
         window.prequelComposer.mount(compose.querySelector('.comment-compose'));
       }
       compose.querySelector('.comment-input').focus();
+      return;
+    }
+    if (e.target.closest('.comment-preview')) {
+      if (e.target.closest('.suggestion-apply, .suggestion-handoff, input.task-item')) e.preventDefault();
       return;
     }
     const task = e.target.closest('input.task-item');

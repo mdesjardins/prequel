@@ -3,6 +3,7 @@
 // code snapshot so Claude can locate the spot even if line numbers shifted).
 
 import { inferLanguage } from '../git/diffParser.js';
+import { stripSuggestions } from '../render/suggestion.js';
 
 function lineLabel(c) {
   return c.startLine === c.endLine ? `Line ${c.startLine}` : `Lines ${c.startLine}–${c.endLine}`;
@@ -17,7 +18,6 @@ function idMarker(c) {
 
 const ATTACHMENT_URL = /(^|[(\s"'])\/attachments\/([a-f0-9]+\.\w+)/g;
 const localizeAttachments = (body) => String(body || '').replace(ATTACHMENT_URL, '$1.prequel/attachments/$2');
-const stripSuggestions = (body) => String(body || '').replace(/```suggestion\n[\s\S]*?```\n?/g, '').trim();
 
 function suggestionNote(c) {
   if (c.handoff === 'agent') return 'Queued for agent: apply this change on their behalf.';

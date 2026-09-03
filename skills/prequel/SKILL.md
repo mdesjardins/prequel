@@ -54,7 +54,7 @@ Each comment has:
 | `suggestion` | `{ lines }` for a suggestion: the exact replacement for `lineSnapshot`; `null` otherwise |
 | `applicable` | `true` when the snapshot still matches the file on disk, `false` when the lines changed; `null` without a suggestion |
 | `handoff` | `"agent"` when the user pressed *Let agent do it*; the change is yours to make |
-| `applied` | `true` once a suggestion was written to disk (by the user or by you) |
+| `applied` | `{ at, lines }` once a suggestion was written to disk (by the user or by you); absent otherwise. Skip these |
 
 Skip any comment whose `branch` is set and differs from the current branch
 (`git branch --show-current`). A `null` branch means "unknown" — include it.
@@ -75,7 +75,9 @@ of `lineSnapshot`. Handle these before the prose comments:
   curl -s -X POST "http://localhost:$PORT/api/comments/$ID/apply"
   ```
 
-  A `409` means the file changed underneath; fall through to the next case.
+  A `409` means the file changed underneath (or it was already applied); fall
+  through to the next case. To apply every applicable suggestion at once instead,
+  `POST /api/suggestions/apply-all` — it returns `{ applied, skipped }`.
 - `applicable: false` — the lines moved or changed. Find `lineSnapshot` in the file,
   apply the intent of `suggestion.lines` by hand, then resolve and reply with one
   line saying how the result differs from the literal suggestion.
