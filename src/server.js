@@ -103,7 +103,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
   );
 
   app.get('/', async (req, res) => {
-    const { view, colorMode, diffMode, requestedBase } = pageParams(req.query, defaultBase);
+    const { view, colorMode, diffMode, requestedBase, query } = pageParams(req.query, defaultBase);
 
     let diff;
     let head;
@@ -143,7 +143,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
           })
       );
     }
-    const { filesHtml, summary } = renderDiff(diff, { view, rev });
+    const { filesHtml, summary } = renderDiff(diff, { view, rev, query });
     const treeHtml = diff.files.length ? renderFileTree(diff) : '';
     res.render('review', {
       repoPath: repoRoot || process.cwd(),
@@ -239,8 +239,9 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     }
     try {
       const { lines, from, eof } = await getBlobLines(repoRoot, { rev, path: filePath, start, end });
-      const html = await highlightLines(lines, inferLanguage(filePath));
-      res.json({ from, eof, lines, html });
+      const plain = lines.length > MAX_HIGHLIGHT_LINES;
+      const html = plain ? null : await highlightLines(lines, inferLanguage(filePath));
+      res.json({ from, eof, lines, html, plain });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

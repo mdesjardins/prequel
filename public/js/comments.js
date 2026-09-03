@@ -124,7 +124,9 @@
   }
 
   const commentRowHtml = (c, isSplit, replies) =>
-    `<tr class="comment-row" data-root-id="${c.id}">${threadCells(isSplit, c.side, threadInner(c, replies))}</tr>`;
+    `<tr class="comment-row" data-root-id="${c.id}" data-file-path="${escapeHtml(c.filePath)}"` +
+    ` data-side="${c.side}" data-line="${c.endLine || c.startLine}">` +
+    `${threadCells(isSplit, c.side, threadInner(c, replies))}</tr>`;
   const fileCommentHtml = (c, replies) =>
     `<div class="file-comment" data-root-id="${c.id}">${threadInner(c, replies)}</div>`;
 
@@ -358,8 +360,10 @@
 
   // --- load, export, clear ----------------------------------------------
   const pending = new Map();
+  const rendered = new Map();
 
   function renderComment(c, replies, { reveal = true } = {}) {
+    rendered.set(c.id, { c, replies });
     if (c.side === 'file') {
       const file = document.querySelector(`.file[data-path="${CSS.escape(c.filePath)}"]`);
       if (file)
@@ -670,7 +674,14 @@
   }
 
   document.addEventListener('prequel:context-loaded', (e) => {
-    for (const [id, { c, replies }] of pending) {
+    for (const row of document.querySelectorAll('.comment-row[data-file-path]')) {
+      const { filePath, side, line, rootId } = row.dataset;
+      if (filePath !== e.detail.filePath || findAnchorCell(filePath, side, line)) continue;
+      const entry = rendered.get(rootId);
+      if (entry) pending.set(rootId, entry);
+      row.remove();
+    }
+    for (const [id, { c, replies }] of [...pending]) {
       if (c.filePath !== e.detail.filePath) continue;
       pending.delete(id);
       renderComment(c, replies, { reveal: false });

@@ -256,7 +256,17 @@ function renderFileBody(file, view, rev) {
   return view === 'split' ? renderSplitTable(file, ctx) : renderUnifiedTable(file, ctx);
 }
 
-function renderFile(file, view, rev) {
+function fileActions(file, rev, query) {
+  if (!rev) return '';
+  const target = file.status === 'removed' ? file.oldPath : file.newPath;
+  const href = `/file/${encodePath(target)}${query ? `?${query}` : ''}`;
+  return (
+    `<a class="view-file-btn" href="${escapeHtml(href)}">View file</a>` +
+    `<button class="expand-all-btn" type="button" disabled>Expand all</button>`
+  );
+}
+
+function renderFile(file, view, rev, query) {
   const path = escapeHtml(file.newPath);
   const renamedFrom =
     file.status === 'renamed' && file.oldPath !== file.newPath
@@ -289,6 +299,7 @@ function renderFile(file, view, rev) {
       <button class="add-file-comment" title="Comment on this file" aria-label="Comment on this file">
         <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M1 2.75C1 1.784 1.784 1 2.75 1h10.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 13.25 12H9.06l-2.573 2.573A1.458 1.458 0 0 1 4 13.543V12H2.75A1.75 1.75 0 0 1 1 10.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h2a.75.75 0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h4.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"></path></svg>
       </button>
+      ${fileActions(file, rev, query)}
       <label class="viewed-toggle">
         <input type="checkbox" class="viewed-checkbox" data-file-id="${file.id}"> Viewed
       </label>
@@ -421,7 +432,7 @@ export function renderFileView({ path: filePath, lines, html, changed, commentab
   );
 }
 
-export function renderDiff(diff, { view = 'split', rev = null } = {}) {
+export function renderDiff(diff, { view = 'split', rev = null, query = '' } = {}) {
   const totalAdd = diff.files.reduce((a, f) => a + f.additions, 0);
   const totalDel = diff.files.reduce((a, f) => a + f.deletions, 0);
   const summary = {
@@ -429,6 +440,6 @@ export function renderDiff(diff, { view = 'split', rev = null } = {}) {
     additions: totalAdd,
     deletions: totalDel,
   };
-  const filesHtml = diff.files.map((f) => renderFile(f, view, rev)).join('\n');
+  const filesHtml = diff.files.map((f) => renderFile(f, view, rev, query)).join('\n');
   return { filesHtml, summary };
 }

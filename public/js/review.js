@@ -81,6 +81,8 @@ function boundaryDirs(row) {
 function decorateBoundary(row) {
   const cell = row.querySelector('.blob-num-expand');
   if (!cell) return;
+  row.dataset.gapStartOrig ??= row.dataset.gapStartNew;
+  row.dataset.gapEndOrig ??= row.dataset.gapEndNew;
   const dirs = boundaryDirs(row);
   cell.innerHTML = dirs
     .map(
@@ -93,6 +95,34 @@ function decorateBoundary(row) {
 
 document.querySelectorAll('tr[data-expander]').forEach(decorateBoundary);
 
+function closeBoundary(row) {
+  row.hidden = true;
+  row.upTop = null;
+}
+
+const visibleBoundaries = (file) => file.querySelectorAll('tr[data-expander]:not([hidden])');
+
+function syncExpandAll(file) {
+  const btn = file.querySelector('.expand-all-btn');
+  if (!btn) return;
+  const open = visibleBoundaries(file).length > 0;
+  const loaded = file.querySelector('tr.context-loaded');
+  btn.disabled = !open && !loaded;
+  btn.textContent = open ? 'Expand all' : 'Collapse';
+}
+
+document.querySelectorAll('.file').forEach(syncExpandAll);
+
+function noticePlain(file) {
+  if (file.querySelector('.context-notice')) return;
+  const tbody = file.querySelector('tbody');
+  const cols = file.querySelector('.diff-table-split') ? 4 : 3;
+  tbody.insertAdjacentHTML(
+    'afterbegin',
+    `<tr class="context-notice"><td colspan="${cols}">Syntax highlighting off for ranges over 5,000 lines</td></tr>`
+  );
+}
+
 function rowsFromHtml(html) {
   const tbody = document.createElement('tbody');
   tbody.innerHTML = html;
@@ -103,9 +133,9 @@ function rowsFromHtml(html) {
 // above the boundary row: "up" chunks stack upward from it (row.upTop tracks
 // the topmost one) and "down" chunks fill in above that block.
 async function expandBoundary(row, dir) {
-  if (!row.isConnected || row.dataset.loading) return;
+  if (!row.isConnected || row.hidden || row.dataset.loading) return;
   const { start, end } = gapOf(row);
-  if (end < start) return row.remove();
+  if (end < start) return closeBoundary(row);
   let from = start;
   let to = end;
   if (dir === 'down') to = Math.min(end, start + CHUNK - 1);
@@ -128,6 +158,7 @@ async function expandBoundary(row, dir) {
         return contextRow(split, n + offset, n, inner);
       })
       .join('');
+    if (data.plain) noticePlain(row.closest('.file'));
     const rows = rowsFromHtml(html);
     const anchor = row.upTop || row;
     rows.forEach((r) => anchor.before(r));
@@ -136,8 +167,9 @@ async function expandBoundary(row, dir) {
     if (dir === 'down') row.dataset.gapStartNew = String(to + 1);
     else if (dir === 'up') row.dataset.gapEndNew = String(from - 1);
     else row.dataset.gapStartNew = String(end + 1);
-    if (gapOf(row).size <= 0) row.remove();
+    if (gapOf(row).size <= 0) closeBoundary(row);
     else decorateBoundary(row);
+    syncExpandAll(row.closest('.file'));
     document.dispatchEvent(
       new CustomEvent('prequel:context-loaded', { detail: { filePath: path } })
     );
@@ -153,7 +185,7 @@ document.addEventListener('prequel:reveal-line', (e) => {
   const { filePath, side, line } = e.detail;
   const file = document.querySelector(`.file[data-path="${CSS.escape(filePath)}"]`);
   if (!file) return;
-  for (const row of file.querySelectorAll('tr[data-expander]')) {
+  for (const row of visibleBoundaries(file)) {
     const { start, end } = gapOf(row);
     const offset = parseInt(row.dataset.offset, 10) || 0;
     const n = side === 'old' ? line - offset : line;
@@ -161,21 +193,27 @@ document.addEventListener('prequel:reveal-line', (e) => {
   }
 });
 
-// Keep --subnav-h in sync with the sticky subnav's real height (it changes if
-// the header wraps), so sticky file headers and the tree pane offset correctly.
-function syncSubnavHeight() {
-  const subnav = document.querySelector('.pr-subnav');
-  if (subnav) {
-    document.documentElement.style.setProperty('--subnav-h', subnav.offsetHeight + 'px');
-  }
+async function expandAll(file) {
+  await Promise.all([...visibleBoundaries(file)].map((r) => expandBoundary(r, 'all')));
+  syncExpandAll(file);
 }
-syncSubnavHeight();
-window.addEventListener('resize', syncSubnavHeight);
-window.addEventListener('load', syncSubnavHeight);
+
+function collapseAll(file) {
+  file.querySelectorAll('tr.context-loaded, tr.context-notice').forEach((r) => r.remove());
+  for (const row of file.querySelectorAll('tr[data-expander]')) {
+    row.dataset.gapStartNew = row.dataset.gapStartOrig;
+    row.dataset.gapEndNew = row.dataset.gapEndOrig;
+    row.hidden = false;
+    row.upTop = null;
+    decorateBoundary(row);
+  }
+  syncExpandAll(file);
+  document.dispatchEvent(
+    new CustomEvent('prequel:context-loaded', { detail: { filePath: file.dataset.path } })
+  );
+}
 
 // --- file tree ----------------------------------------------------------
-const TREE_KEY = 'prequel:tree'; // 'hidden' | 'shown'
-
 function markTreeViewed(id, viewed) {
   const row = document.querySelector(`.tree-file-row[data-file-id="${id}"]`);
   if (row) row.classList.toggle('is-viewed', viewed);
@@ -189,68 +227,6 @@ function setActiveTreeFile(id) {
   if (row) row.classList.add('is-active');
 }
 
-(function applyTreeState() {
-  if (localStorage.getItem(TREE_KEY) === 'hidden') {
-    document.querySelector('.review-layout')?.classList.add('tree-hidden');
-  }
-})();
-
-// --- resizable file pane (drag the divider; width persists) --------------
-const TREE_W_KEY = 'prequel:tree-w';
-const TREE_W_MIN = 180;
-const treeWMax = () => Math.min(800, Math.round(window.innerWidth * 0.6));
-
-function setTreeWidth(px) {
-  const w = Math.max(TREE_W_MIN, Math.min(treeWMax(), Math.round(px)));
-  document.querySelector('.review-layout')?.style.setProperty('--tree-w', w + 'px');
-  return w;
-}
-
-(function applySavedTreeWidth() {
-  const saved = parseInt(localStorage.getItem(TREE_W_KEY), 10);
-  if (Number.isFinite(saved)) setTreeWidth(saved);
-})();
-
-(function initTreeResizer() {
-  const resizer = document.querySelector('.tree-resizer');
-  const pane = document.querySelector('.file-tree-pane');
-  if (!resizer || !pane) return;
-
-  let startX = 0;
-  let startW = 0;
-
-  const onMove = (e) => {
-    setTreeWidth(startW + (e.clientX - startX));
-  };
-  const onUp = () => {
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
-    resizer.classList.remove('is-dragging');
-    document.body.style.userSelect = '';
-    document.body.style.cursor = '';
-    const w = parseInt(getComputedStyle(pane).width, 10);
-    if (Number.isFinite(w)) localStorage.setItem(TREE_W_KEY, String(w));
-  };
-
-  resizer.addEventListener('mousedown', (e) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    startX = e.clientX;
-    startW = parseInt(getComputedStyle(pane).width, 10) || 300;
-    resizer.classList.add('is-dragging');
-    document.body.style.userSelect = 'none';
-    document.body.style.cursor = 'col-resize';
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  });
-
-  // double-click the divider to reset to the default width
-  resizer.addEventListener('dblclick', () => {
-    document.querySelector('.review-layout')?.style.removeProperty('--tree-w');
-    localStorage.removeItem(TREE_W_KEY);
-  });
-})();
-
 document.addEventListener('click', (e) => {
   // Hunk context expander
   const expander = e.target.closest('.expander');
@@ -260,19 +236,11 @@ document.addEventListener('click', (e) => {
     return;
   }
 
-  // Toggle the file-tree pane
-  const treeToggle = e.target.closest('.tree-pane-toggle');
-  if (treeToggle) {
-    const layout = document.querySelector('.review-layout');
-    const hidden = layout.classList.toggle('tree-hidden');
-    localStorage.setItem(TREE_KEY, hidden ? 'hidden' : 'shown');
-    return;
-  }
-
-  // Collapse/expand a tree folder
-  const dirRow = e.target.closest('.tree-dir-row');
-  if (dirRow) {
-    dirRow.closest('.tree-dir').classList.toggle('is-collapsed');
+  const expandAllBtn = e.target.closest('.expand-all-btn');
+  if (expandAllBtn) {
+    const file = expandAllBtn.closest('.file');
+    if (visibleBoundaries(file).length) expandAll(file);
+    else collapseAll(file);
     return;
   }
 
