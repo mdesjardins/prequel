@@ -41,7 +41,7 @@
             <span class="file-notice file-notice-deleted">Deleted in this diff, showing base version</span>
           <% } %>
           <% if (plain) { %>
-            <span class="file-notice">Syntax highlighting off for files over 5,000 lines</span>
+            <span class="file-notice">Syntax highlighting off for files over <%= maxHighlight.toLocaleString('en-US') %> lines</span>
           <% } %>
           <% if (!commentable && !isDeleted && !isBinary) { %>
             <span class="file-notice">Not in this diff, read-only</span>

@@ -113,13 +113,13 @@ function syncExpandAll(file) {
 
 document.querySelectorAll('.file').forEach(syncExpandAll);
 
-function noticePlain(file) {
+function noticePlain(file, max) {
   if (file.querySelector('.context-notice')) return;
   const tbody = file.querySelector('tbody');
   const cols = file.querySelector('.diff-table-split') ? 4 : 3;
   tbody.insertAdjacentHTML(
     'afterbegin',
-    `<tr class="context-notice"><td colspan="${cols}">Syntax highlighting off for ranges over 5,000 lines</td></tr>`
+    `<tr class="context-notice"><td colspan="${cols}">Syntax highlighting off for ranges over ${max.toLocaleString('en-US')} lines</td></tr>`
   );
 }
 
@@ -158,7 +158,7 @@ async function expandBoundary(row, dir) {
         return contextRow(split, n + offset, n, inner);
       })
       .join('');
-    if (data.plain) noticePlain(row.closest('.file'));
+    if (data.plain) noticePlain(row.closest('.file'), data.maxHighlight);
     const rows = rowsFromHtml(html);
     const anchor = row.upTop || row;
     rows.forEach((r) => anchor.before(r));

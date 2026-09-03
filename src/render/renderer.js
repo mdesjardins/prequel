@@ -250,7 +250,7 @@ function renderSplitTable(file, ctx) {
 // --- file + document ----------------------------------------------------
 function renderFileBody(file, view, rev) {
   if (file.isBinary) {
-    return '<div class="binary-notice">Binary file not shown.</div>';
+    return binaryNotice();
   }
   const ctx = { path: file.newPath, rev };
   return view === 'split' ? renderSplitTable(file, ctx) : renderUnifiedTable(file, ctx);
@@ -386,6 +386,10 @@ function renderTreeNode(node, depth, opts = DIFF_TREE) {
       `</a>`;
   }
   return html;
+}
+
+export function binaryNotice() {
+  return '<div class="binary-notice">Binary file not shown.</div>';
 }
 
 export function renderFileTree(diff) {

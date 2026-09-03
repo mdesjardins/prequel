@@ -2,7 +2,7 @@ import express from 'express';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { renderDiff, renderFileTree, renderFileView, renderRepoTree } from './render/renderer.js';
+import { binaryNotice, renderDiff, renderFileTree, renderFileView, renderRepoTree } from './render/renderer.js';
 import { highlightDiff, highlightLines } from './render/highlighter.js';
 import { annotateWordDiffs } from './render/wordDiff.js';
 import {
@@ -181,8 +181,10 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     const viewRev = diffMode === 'branch' ? 'HEAD' : 'WORKTREE';
     const rev = isDeleted ? baseRev : viewRev;
 
-    if (!(await blobExists(repoRoot, { rev, path: filePath }))) return res.status(404).send('not found');
     const text = await getBlobText(repoRoot, { rev, path: filePath });
+    if (text === '' && !(await blobExists(repoRoot, { rev, path: filePath }))) {
+      return res.status(404).send('not found');
+    }
     const isBinary = Boolean(file?.isBinary) || isBinaryText(text);
     const commentable = Boolean(file) && !isDeleted && !isBinary;
     const lines = isBinary ? [] : splitLines(text);
@@ -202,10 +204,11 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
       query,
     });
     const tableHtml = isBinary
-      ? '<div class="binary-notice">Binary file not shown.</div>'
+      ? binaryNotice()
       : renderFileView({ path: filePath, lines, html, changed, commentable });
 
     res.render('file', {
+      maxHighlight: MAX_HIGHLIGHT_LINES,
       repoPath: repoRoot,
       path: filePath,
       crumbs: filePath.split('/'),
@@ -241,7 +244,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
       const { lines, from, eof } = await getBlobLines(repoRoot, { rev, path: filePath, start, end });
       const plain = lines.length > MAX_HIGHLIGHT_LINES;
       const html = plain ? null : await highlightLines(lines, inferLanguage(filePath));
-      res.json({ from, eof, lines, html, plain });
+      res.json({ from, eof, lines, html, plain, maxHighlight: MAX_HIGHLIGHT_LINES });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

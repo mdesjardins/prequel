@@ -294,6 +294,7 @@
   // removing a reply takes just that card.
   function dropComment(id) {
     pending.delete(id);
+    rendered.delete(id);
     const container = document.querySelector(`[data-root-id="${CSS.escape(id)}"]`);
     if (container) {
       container.remove();
@@ -450,6 +451,7 @@
 
   function removeAllCommentEls() {
     pending.clear();
+    rendered.clear();
     document
       .querySelectorAll('.comment-row, .file-comment, .file-comment-compose')
       .forEach((el) => el.remove());
