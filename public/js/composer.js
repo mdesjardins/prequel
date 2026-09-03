@@ -71,12 +71,13 @@
       `<div class="composer-tabs" role="tablist">` +
       `<button type="button" class="composer-tab is-active" data-tab="write" role="tab" aria-selected="true">Write</button>` +
       `<button type="button" class="composer-tab" data-tab="preview" role="tab" aria-selected="false">Preview</button>` +
-      `</div><div class="composer-tools">${tools}</div></div>` +
+      `</div><div class="composer-tools">${tools}</div>` +
+      `<div class="composer-saved-menu" role="menu" tabindex="-1" hidden></div></div>` +
+      `<div class="composer-notice" hidden></div>` +
       `<textarea class="comment-input" rows="4" placeholder="Leave a comment"></textarea>` +
       `<div class="comment-preview markdown-body" hidden></div>` +
-      `<div class="composer-saved-menu" hidden></div>` +
       `<div class="comment-compose-actions">` +
-      `<span class="composer-hints">${esc(mod)}B ${esc(mod)}I ${esc(mod)}E ${esc(mod)}K · ${esc(mod)}⏎ to comment</span>` +
+      `<span class="composer-hints">${esc(mod)}B ${esc(mod)}I ${esc(mod)}E ${esc(mod)}K · ${esc(mod)}⏎ to comment · Paste or drop images</span>` +
       `<button type="button" class="btn comment-cancel">Cancel</button>` +
       `<button type="submit" class="btn btn-primary">Comment</button>` +
       `</div></form>`
@@ -206,19 +207,205 @@
     else showWrite(form);
   }
 
+  function insertAt(ta, text) {
+    const { selectionStart: s, value: v } = ta;
+    ta.value = v.slice(0, s) + text + v.slice(s);
+    ta.setSelectionRange(s + text.length, s + text.length);
+    ta.focus();
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  function notice(form, msg) {
+    const el = form.querySelector('.composer-notice');
+    el.hidden = !msg;
+    el.innerHTML = msg ? `<span class="composer-error">${esc(msg)}</span>` : '';
+  }
+
+  // --- saved replies ------------------------------------------------------
+  let savedCache = null;
+
+  async function loadSaved(force) {
+    if (savedCache && !force) return savedCache;
+    const res = await fetch('/api/saved-replies');
+    if (!res.ok) throw new Error('could not load saved replies');
+    savedCache = (await res.json()).replies || [];
+    return savedCache;
+  }
+
+  function renderSaved(menu, items) {
+    const rows = items
+      .map(
+        (r, i) =>
+          `<div class="composer-saved-row">` +
+          `<button type="button" class="composer-saved-item" role="menuitem" data-idx="${i}" title="${esc(r.body)}">${esc(r.name)}</button>` +
+          `<button type="button" class="composer-saved-del" data-id="${esc(r.id)}" title="Delete saved reply" aria-label="Delete ${esc(r.name)}">×</button>` +
+          `</div>`
+      )
+      .join('');
+    menu.innerHTML =
+      (rows || '<div class="composer-muted composer-saved-empty">No saved replies yet</div>') +
+      `<button type="button" class="composer-saved-add" role="menuitem">Save current as reply…</button>`;
+  }
+
+  function closeSaved(form, refocus = true) {
+    const menu = form.querySelector('.composer-saved-menu');
+    if (menu.hidden) return;
+    menu.hidden = true;
+    document.removeEventListener('mousedown', menu._outside);
+    if (refocus) form.querySelector('.comment-input').focus();
+  }
+
+  async function openSaved(form, force) {
+    const menu = form.querySelector('.composer-saved-menu');
+    menu.hidden = false;
+    menu.innerHTML = '<div class="composer-muted composer-saved-empty">Loading…</div>';
+    try {
+      renderSaved(menu, await loadSaved(force));
+    } catch (err) {
+      menu.innerHTML = `<div class="composer-error composer-saved-empty">${esc(err.message)}</div>`;
+    }
+    document.removeEventListener('mousedown', menu._outside);
+    menu._outside = (e) => {
+      if (!menu.contains(e.target) && !e.target.closest('[data-act="saved"]')) closeSaved(form, false);
+    };
+    document.addEventListener('mousedown', menu._outside);
+    (menu.querySelector('[role="menuitem"]') || menu).focus();
+  }
+
   function toggleSaved(form) {
     const menu = form.querySelector('.composer-saved-menu');
-    if (!menu.hidden) return (menu.hidden = true);
-    const items = window.prequelSavedReplies ? window.prequelSavedReplies.items() : [];
-    menu.innerHTML = items.length
-      ? items.map((r) => `<button type="button" class="composer-saved-item" data-id="${esc(r.id)}">${esc(r.name)}</button>`).join('')
-      : '<span class="composer-muted">No saved replies yet</span>';
-    menu.hidden = false;
+    return menu.hidden ? openSaved(form) : closeSaved(form);
+  }
+
+  async function savedAction(form, target) {
+    const ta = form.querySelector('.comment-input');
+    const item = target.closest('.composer-saved-item');
+    if (item) {
+      const r = (savedCache || [])[Number(item.dataset.idx)];
+      closeSaved(form);
+      if (r) insertAt(ta, r.body);
+      return;
+    }
+    const del = target.closest('.composer-saved-del');
+    if (del) {
+      if (!confirm('Delete this saved reply?')) return;
+      const res = await fetch(`/api/saved-replies/${encodeURIComponent(del.dataset.id)}`, { method: 'DELETE' });
+      if (!res.ok) return notice(form, 'Could not delete saved reply');
+      return openSaved(form, true);
+    }
+    if (target.closest('.composer-saved-add')) {
+      const body = ta.value.trim();
+      if (!body) return notice(form, 'Write the reply text first, then save it');
+      const name = prompt('Name this saved reply');
+      if (!name || !name.trim()) return;
+      const res = await fetch('/api/saved-replies', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), body }),
+      });
+      if (!res.ok) return notice(form, 'Could not save reply');
+      notice(form, '');
+      return openSaved(form, true);
+    }
+  }
+
+  function savedKeys(form, e) {
+    const menu = form.querySelector('.composer-saved-menu');
+    const items = [...menu.querySelectorAll('[role="menuitem"]')];
+    const i = items.indexOf(document.activeElement);
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      return closeSaved(form);
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const n = items.length;
+      if (!n) return;
+      items[e.key === 'ArrowDown' ? (i + 1) % n : (i - 1 + n) % n].focus();
+      return;
+    }
+    if (e.key === 'Enter' && i >= 0) {
+      e.preventDefault();
+      savedAction(form, items[i]);
+    }
+  }
+
+  // --- attachments --------------------------------------------------------
+  const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+
+  const readBase64 = (file) =>
+    new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(',')[1] || '');
+      r.onerror = () => reject(new Error('could not read file'));
+      r.readAsDataURL(file);
+    });
+
+  async function uploadImage(form, ta, file) {
+    const name = file.name || 'image';
+    const placeholder = `![Uploading ${name}…]()`;
+    insertAt(ta, placeholder);
+    notice(form, '');
+    const swap = (text) => {
+      const at = ta.value.indexOf(placeholder);
+      if (at === -1) return;
+      const { selectionStart: s, selectionEnd: e } = ta;
+      ta.value = ta.value.slice(0, at) + text + ta.value.slice(at + placeholder.length);
+      const shift = text.length - placeholder.length;
+      ta.setSelectionRange(s > at ? s + shift : s, e > at ? e + shift : e);
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    try {
+      const data = await readBase64(file);
+      const res = await fetch('/api/attachments', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, type: file.type, data }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out.error || 'upload failed');
+      swap(`![${name}](${out.url})`);
+    } catch (err) {
+      swap('');
+      notice(form, `Upload failed: ${err.message}`);
+    }
+  }
+
+  const imageFiles = (list) => [...(list || [])].filter((f) => IMAGE_TYPES.includes(f.type));
+
+  function mountAttachments(form, ta) {
+    ta.addEventListener('paste', (e) => {
+      const files = imageFiles(e.clipboardData?.files);
+      if (!files.length) return;
+      e.preventDefault();
+      files.forEach((f) => uploadImage(form, ta, f));
+    });
+    ta.addEventListener('dragover', (e) => {
+      if (!e.dataTransfer?.types?.includes('Files')) return;
+      e.preventDefault();
+      ta.classList.add('is-dragover');
+    });
+    ta.addEventListener('dragleave', () => ta.classList.remove('is-dragover'));
+    ta.addEventListener('drop', (e) => {
+      ta.classList.remove('is-dragover');
+      const files = imageFiles(e.dataTransfer?.files);
+      if (!files.length) return;
+      e.preventDefault();
+      files.forEach((f) => uploadImage(form, ta, f));
+    });
   }
 
   function mount(form) {
     const ta = form.querySelector('.comment-input');
+    const menu = form.querySelector('.composer-saved-menu');
+    menu.addEventListener('click', (e) => {
+      e.preventDefault();
+      savedAction(form, e.target);
+    });
+    menu.addEventListener('keydown', (e) => savedKeys(form, e));
+    mountAttachments(form, ta);
     form.addEventListener('click', (e) => {
+      if (e.target.closest('.composer-saved-menu')) return;
       const tab = e.target.closest('.composer-tab');
       if (tab) return setTab(form, tab.dataset.tab);
       const tool = e.target.closest('.composer-tool');
