@@ -38,7 +38,8 @@
   ],
   "scripts": {
     "start": "node bin/prequel.js",
-    "dev": "node bin/prequel.js"
+    "dev": "node bin/prequel.js",
+    "test": "node --test \"test/*.test.js\""
   },
   "dependencies": {
     "@primer/primitives": "^10.5.0",
