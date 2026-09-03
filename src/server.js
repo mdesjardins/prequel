@@ -27,6 +27,7 @@ import {
 } from './comments/commentStore.js';
 import { buildMarkdown, buildJson } from './export/claudeExport.js';
 import { marked } from 'marked';
+import { parseSuggestions, renderSuggestionBlock } from './render/suggestion.js';
 
 const escapeHtml = (s) =>
   String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -39,9 +40,54 @@ export function renderMarkdown(body) {
   return marked.parse(body || '');
 }
 
-// Add rendered markdown (bodyHtml) for the client to display.
-function withHtml(c) {
-  return { ...c, bodyHtml: renderMarkdown(c.body) };
+const isLineRoot = (c) => c && c.side !== 'file' && !c.parentId;
+
+// Render a comment body; `suggestion` fences on a root line comment become a
+// mini diff against the snapshot, everywhere else they stay plain code.
+export function renderCommentHtml(c, { snapshot = [], applicable = null, handoff = null } = {}) {
+  if (!isLineRoot(c)) return renderMarkdown(c.body);
+  const renderer = new marked.Renderer();
+  renderer.html = mdRenderer.html;
+  const base = renderer.code.bind(renderer);
+  renderer.code = (code, lang, escaped) => {
+    if ((lang || '').trim() !== 'suggestion') return base(code, lang, escaped);
+    const added = code === '' ? [] : code.split(/\r?\n/);
+    return renderSuggestionBlock({ removed: snapshot, added, applicable, handoff, id: c.id });
+  };
+  return marked.parse(c.body || '', { renderer });
+}
+
+const sameLines = (a, b) => a.length === b.length && a.every((l, i) => l === b[i]);
+
+// Per-request decorator: adds bodyHtml, suggestion lines and applicability
+// (snapshot vs working tree), caching file reads by path.
+function decorator(repoRoot) {
+  const files = new Map();
+  const linesOf = async (c) => {
+    if (!files.has(c.filePath)) {
+      files.set(
+        c.filePath,
+        getBlobText(repoRoot, { rev: 'WORKTREE', path: c.filePath })
+          .then((t) => splitLines(t))
+          .catch(() => [])
+      );
+    }
+    const all = await files.get(c.filePath);
+    return all.slice(c.startLine - 1, c.endLine);
+  };
+  return async (c) => {
+    const sug = isLineRoot(c) ? parseSuggestions(c.body)[0] || null : null;
+    if (!sug) return { ...c, bodyHtml: renderCommentHtml(c), suggestion: null, applicable: null };
+    const snapshot = Array.isArray(c.lineSnapshot) ? c.lineSnapshot : [];
+    const cur = repoRoot && safeRelPath(c.filePath) ? await linesOf(c) : [];
+    const applicable = snapshot.length > 0 && sameLines(cur, snapshot);
+    return {
+      ...c,
+      bodyHtml: renderCommentHtml(c, { snapshot, applicable, handoff: c.handoff || null }),
+      suggestion: { lines: sug.lines },
+      applicable,
+    };
+  };
 }
 
 // Best-effort: add ".prequel/" to the repo's local git exclude so exported
@@ -301,10 +347,18 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
   });
 
   // --- review comments ---------------------------------------------------
-  app.post('/api/preview', (req, res) => {
+  app.post('/api/preview', async (req, res) => {
     const b = req.body || {};
     if (typeof b.body !== 'string') return res.status(400).json({ error: 'bad params' });
-    res.json({ html: renderMarkdown(b.body) });
+    const start = Number(b.startLine);
+    const end = Number.isFinite(Number(b.endLine)) ? Number(b.endLine) : start;
+    const anchored = repoRoot && b.side === 'new' && typeof b.filePath === 'string' && Number.isFinite(start);
+    if (!anchored) return res.json({ html: renderMarkdown(b.body) });
+    const filePath = safeRelPath(b.filePath);
+    if (!filePath) return res.json({ html: renderMarkdown(b.body) });
+    const { lines } = await getBlobLines(repoRoot, { rev: 'WORKTREE', path: filePath, start, end });
+    const c = { body: b.body, side: 'new', parentId: null };
+    res.json({ html: renderCommentHtml(c, { snapshot: lines, applicable: true }) });
   });
 
   app.get('/api/comments', async (req, res) => {
@@ -320,7 +374,8 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     if (status) comments = comments.filter((c) => (c.status || 'open') === status);
     if (author) comments = comments.filter((c) => (c.author || 'user') === author);
     if (rootsOnly) comments = comments.filter((c) => !c.parentId);
-    res.json({ comments: comments.map(withHtml) });
+    const decorate = decorator(repoRoot);
+    res.json({ comments: await Promise.all(comments.map(decorate)) });
   });
 
   app.post('/api/comments', async (req, res) => {
@@ -346,8 +401,9 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
         branch: parent.branch ?? null,
         lineSnapshot: [],
       });
-      emit('comment.created', { comment: withHtml(reply) }, req);
-      return res.json({ comment: withHtml(reply) });
+      const out = await decorator(repoRoot)(reply);
+      emit('comment.created', { comment: out }, req);
+      return res.json({ comment: out });
     }
 
     const side = b.side === 'old' ? 'old' : b.side === 'file' ? 'file' : 'new';
@@ -367,8 +423,9 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
       author,
       parentId: null,
     });
-    emit('comment.created', { comment: withHtml(comment) }, req);
-    res.json({ comment: withHtml(comment) });
+    const out = await decorator(repoRoot)(comment);
+    emit('comment.created', { comment: out }, req);
+    res.json({ comment: out });
   });
 
   app.patch('/api/comments/:id', async (req, res) => {
@@ -379,8 +436,9 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     if (b.status === 'open' || b.status === 'resolved') patch.status = b.status;
     const comment = await updateComment(repoRoot, req.params.id, patch);
     if (!comment) return res.status(404).json({ error: 'not found' });
-    emit('comment.updated', { comment: withHtml(comment) }, req);
-    res.json({ comment: withHtml(comment) });
+    const out = await decorator(repoRoot)(comment);
+    emit('comment.updated', { comment: out }, req);
+    res.json({ comment: out });
   });
 
   app.delete('/api/comments/:id', async (req, res) => {

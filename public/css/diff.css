@@ -1329,3 +1329,66 @@ body {
   color: var(--fgColor-default, #1f2328);
   cursor: pointer;
 }
+
+/* suggestion blocks inside comment bodies */
+.suggestion {
+  margin: 8px 0;
+  border: 1px solid var(--borderColor-default, #d0d7de);
+  border-radius: 6px;
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.suggestion-header {
+  padding: 6px 10px;
+  background: var(--bgColor-muted, #f6f8fa);
+  border-bottom: 1px solid var(--borderColor-default, #d0d7de);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--fgColor-muted, #656d76);
+}
+.suggestion.is-outdated .suggestion-header {
+  color: var(--fgColor-attention, #9a6700);
+}
+.suggestion.is-queued .suggestion-header {
+  color: var(--fgColor-done, #8250df);
+}
+.suggestion-diff {
+  width: 100%;
+  border-collapse: collapse;
+}
+.suggestion-diff td {
+  padding: 0 10px;
+  white-space: pre;
+  line-height: 20px;
+}
+.suggestion-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  border-top: 1px solid var(--borderColor-default, #d0d7de);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.suggestion-actions button {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--borderColor-default, #d0d7de);
+  background: var(--button-default-bgColor-rest, #f6f8fa);
+  color: var(--fgColor-default, #1f2328);
+  cursor: pointer;
+}
+.suggestion-apply:not([disabled]) {
+  background: var(--button-primary-bgColor-rest, #1f883d);
+  border-color: var(--button-primary-bgColor-rest, #1f883d);
+  color: #fff;
+}
+.suggestion-actions button[disabled] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.suggestion-error {
+  color: var(--fgColor-danger, #d1242f);
+  font-size: 12px;
+}
