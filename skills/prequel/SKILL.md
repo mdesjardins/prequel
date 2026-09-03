@@ -50,6 +50,11 @@ Each comment has:
 | `body` | The user's comment, as markdown |
 | `branch` | Branch the comment was written on; may be `null` |
 | `bodyHtml` | Rendered markdown — ignore it, read `body` |
+| `kind` | `suggestion` (carries an exact code change), `question` (mentions `@agent`, wants an answer), or `comment` |
+| `suggestion` | `{ lines }` for a suggestion: the exact replacement for `lineSnapshot`; `null` otherwise |
+| `applicable` | `true` when the snapshot still matches the file on disk, `false` when the lines changed; `null` without a suggestion |
+| `handoff` | `"agent"` when the user pressed *Let agent do it*; the change is yours to make |
+| `applied` | `true` once a suggestion was written to disk (by the user or by you) |
 
 Skip any comment whose `branch` is set and differs from the current branch
 (`git branch --show-current`). A `null` branch means "unknown" — include it.
@@ -59,7 +64,31 @@ you've started editing. Treat `lineSnapshot` as the authoritative locator and
 `startLine` as a hint; find the snapshot text in the file rather than trusting the
 number.
 
-## 3. Work them one at a time
+## 3. Apply suggestions first
+
+Comments with `kind: "suggestion"` carry the exact lines the user wants in place
+of `lineSnapshot`. Handle these before the prose comments:
+
+- `applicable: true` — let the server write and resolve it for you:
+
+  ```bash
+  curl -s -X POST "http://localhost:$PORT/api/comments/$ID/apply"
+  ```
+
+  A `409` means the file changed underneath; fall through to the next case.
+- `applicable: false` — the lines moved or changed. Find `lineSnapshot` in the file,
+  apply the intent of `suggestion.lines` by hand, then resolve and reply with one
+  line saying how the result differs from the literal suggestion.
+- `handoff: "agent"` — the user chose *Let agent do it*; treat it like the case above
+  and always make the change yourself.
+
+## 4. Answer questions instead of editing
+
+A comment with `kind: "question"` contains `@agent`. The user wants an answer,
+not a change. Reply in the thread (section 6) and mark it resolved. Do not edit
+code for a question unless the reply itself says you did.
+
+## 5. Work the rest one at a time
 
 For each comment, in file order: read the surrounding code, make the change, then
 immediately mark it resolved:
@@ -76,7 +105,7 @@ reply and the resolve appear as you go.
 Related comments in the same file can be fixed together, but resolve them
 individually so the UI stays accurate.
 
-## 4. Reply when the fix isn't self-explanatory
+## 6. Reply when the fix isn't self-explanatory
 
 You can post a reply into a comment's thread. A reply needs only the parent id and
 a body — it inherits the file and line from the comment it answers:
@@ -87,8 +116,8 @@ curl -s -X POST "http://localhost:$PORT/api/comments" \
   -d '{"parentId":"'"$ID"'","author":"claude","body":"Renamed to `parseHunk`; the old name shadowed the import."}'
 ```
 
-Always pass `"author":"claude"` so your messages are visually distinct and stay out
-of the work queue.
+Always pass `"author":"claude"` (the API value for agent-authored messages, whatever
+agent you are) so your messages are visually distinct and stay out of the work queue.
 
 Don't reply "done" to every comment — the resolved state already says that. Reply
 when there's something the diff doesn't show: a decision you made, an assumption,
@@ -101,7 +130,20 @@ needs a human, and the reply is what tells them why — put the reasoning in the
 thread, not only in your terminal summary, because the browser is where they're
 looking.
 
-## 5. Report
+## 7. Task lists and images
+
+A comment body may contain task items (`- [ ] rename the helper`). Tick each one as
+you finish it, by index counted from the first task item in that comment:
+
+```bash
+curl -s -X PATCH "http://localhost:$PORT/api/comments/$ID" \
+  -H 'content-type: application/json' -d '{"taskIndex":0,"checked":true}'
+```
+
+Bodies may reference images as `.prequel/attachments/<file>` inside the repo;
+open them when the comment depends on what they show.
+
+## 8. Report
 
 When done, summarize briefly: what you changed, and any comments you left open and
 why. Don't restate every comment — the user wrote them and can see the page.

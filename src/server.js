@@ -85,6 +85,14 @@ export function toggleTask(body, idx, checked) {
 
 const isLineRoot = (c) => c && c.side !== 'file' && !c.parentId;
 
+const stripCode = (body) => String(body || '').replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
+const hasMention = (body) => new RegExp(MENTION.source).test(stripCode(body));
+export const kindOf = (c) => {
+  if (isLineRoot(c) && c.side === 'new' && parseSuggestions(c.body).length) return 'suggestion';
+  if (hasMention(c.body)) return 'question';
+  return 'comment';
+};
+
 // Render a comment body; `suggestion` fences on a root line comment become a
 // mini diff against the snapshot, everywhere else they stay plain code.
 export function renderCommentHtml(
@@ -122,7 +130,7 @@ function decorator(repoRoot) {
   };
   return async (c) => {
     const sug = isLineRoot(c) ? parseSuggestions(c.body)[0] || null : null;
-    if (!sug) return { ...c, bodyHtml: renderCommentHtml(c), suggestion: null, applicable: null };
+    if (!sug) return { ...c, kind: kindOf(c), bodyHtml: renderCommentHtml(c), suggestion: null, applicable: null };
     const snapshot = Array.isArray(c.lineSnapshot) ? c.lineSnapshot : [];
     const cur = repoRoot && safeRelPath(c.filePath) ? await linesOf(c) : [];
     const applicable = snapshot.length > 0 && sameLines(cur, snapshot);
@@ -134,8 +142,10 @@ function decorator(repoRoot) {
         handoff: c.handoff || null,
         applied: Boolean(c.applied),
       }),
+      kind: kindOf(c),
       suggestion: { lines: sug.lines },
       applicable,
+      handoff: c.handoff || null,
     };
   };
 }
@@ -655,7 +665,10 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     // Replies (and anything Claude wrote) are conversation, not asks — the
     // export is the list of things being requested.
     const all = await listComments(repoRoot, branch);
-    const comments = all.filter((c) => !c.parentId && (c.author || 'user') === 'user');
+    const decorate = decorator(repoRoot);
+    const comments = await Promise.all(
+      all.filter((c) => !c.parentId && (c.author || 'user') === 'user').map(decorate)
+    );
     if (!comments.length) return res.json({ count: 0, content: '', path: null });
 
     const content =

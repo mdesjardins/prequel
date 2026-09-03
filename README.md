@@ -63,6 +63,25 @@ decision or says why it *didn't* make a change. Its messages are labelled and
 accented so they're distinguishable from yours, and they never re-enter its own
 work queue. You can also resolve or reopen any comment yourself from the thread.
 
+## Reviewing
+
+The comment box works like GitHub's: **Write** and **Preview** tabs, a toolbar
+(suggestion, heading, bold, italic, quote, code, link, lists, task list, `@agent`,
+saved replies) with tooltips, and the usual shortcuts (`⌘B`, `⌘I`, `⌘E`, `⌘K`,
+`⌘⏎` to post). Paste or drop an image to attach it; files land in `.prequel/attachments/`.
+
+**Suggestions.** *Add a suggestion* inserts the selected lines in a
+` ```suggestion ` fence for you to edit. A posted suggestion shows a mini diff with
+**Apply now** (writes it to the working tree and resolves the comment; the diff
+updates live) and **Let agent do it** (queues it for the agent). **Apply N
+suggestions** in the header applies every applicable one. A suggestion whose lines
+have since changed shows as *Outdated*.
+
+**For the agent.** `@agent` marks a comment as a question: the agent replies and
+resolves without editing. Task lists (`- [ ]`) render as checkboxes the agent ticks
+as it works. Saved replies are canned snippets stored per machine under
+`~/.prequel/`.
+
 ## Run from source
 
 ```bash

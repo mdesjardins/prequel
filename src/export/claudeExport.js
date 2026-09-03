@@ -15,6 +15,17 @@ function idMarker(c) {
   return `<!-- prequel:id ${c.id} -->`;
 }
 
+const ATTACHMENT_URL = /(^|[(\s"'])\/attachments\/([a-f0-9]+\.\w+)/g;
+const localizeAttachments = (body) => String(body || '').replace(ATTACHMENT_URL, '$1.prequel/attachments/$2');
+const stripSuggestions = (body) => String(body || '').replace(/```suggestion\n[\s\S]*?```\n?/g, '').trim();
+
+function suggestionNote(c) {
+  if (c.handoff === 'agent') return 'Queued for agent: apply this change on their behalf.';
+  if (c.applied) return 'Already applied.';
+  if (c.applicable === false) return 'Outdated: the lines changed since this was written; adapt the intent.';
+  return 'Suggested change (apply verbatim when the snapshot matches; adapt otherwise).';
+}
+
 function blockquote(body) {
   return String(body || '')
     .split('\n')
@@ -49,7 +60,8 @@ export function buildMarkdown(repoRoot, branch, comments) {
       if (c.side === 'file') {
         out.push('### File comment');
         out.push(idMarker(c));
-        out.push(blockquote(c.body));
+        if (c.kind === 'question') out.push('Question for the agent: reply and resolve, do not edit code.');
+        out.push(blockquote(localizeAttachments(c.body)));
         out.push('');
         continue;
       }
@@ -61,7 +73,17 @@ export function buildMarkdown(repoRoot, branch, comments) {
         out.push(code);
         out.push('```');
       }
-      out.push(blockquote(c.body));
+      if (c.kind === 'question') out.push('Question for the agent: reply and resolve, do not edit code.');
+      if (c.kind === 'suggestion' && c.suggestion) {
+        const prose = stripSuggestions(localizeAttachments(c.body));
+        if (prose) out.push(blockquote(prose));
+        out.push(suggestionNote(c));
+        out.push('```suggestion');
+        for (const l of c.suggestion.lines) out.push(l);
+        out.push('```');
+      } else {
+        out.push(blockquote(localizeAttachments(c.body)));
+      }
       out.push('');
     }
   }
@@ -77,7 +99,12 @@ export function buildJson(comments) {
         side: c.side,
         lines: c.side === 'file' ? null : [c.startLine, c.endLine],
         code: (c.lineSnapshot || []).join('\n'),
-        comment: c.body,
+        comment: localizeAttachments(c.body),
+        kind: c.kind || 'comment',
+        suggestion: c.suggestion || null,
+        applicable: c.applicable ?? null,
+        handoff: c.handoff || null,
+        applied: Boolean(c.applied),
       }))
     ),
     null,
