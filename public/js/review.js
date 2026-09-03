@@ -132,13 +132,29 @@ function rowsFromHtml(html) {
 // Reveal part of the hidden gap a boundary row stands for. Loaded rows sit
 // above the boundary row: "up" chunks stack upward from it (row.upTop tracks
 // the topmost one) and "down" chunks fill in above that block.
-async function expandBoundary(row, dir) {
+function splitAbove(row, s, e) {
+  const upper = row.cloneNode(true);
+  upper.classList.remove('boundary-trailing');
+  upper.hidden = false;
+  upper.upTop = null;
+  delete upper.dataset.loading;
+  upper.dataset.split = '1';
+  upper.dataset.gapStartNew = String(s);
+  upper.dataset.gapEndNew = String(e);
+  (row.upTop || row).before(upper);
+  decorateBoundary(upper);
+}
+
+// `range` reveals an explicit slice from the middle of the gap; the part above
+// the slice becomes a new boundary row and `row` keeps the part below.
+async function expandBoundary(row, dir, range) {
   if (!row.isConnected || row.hidden || row.dataset.loading) return;
   const { start, end } = gapOf(row);
   if (end < start) return closeBoundary(row);
   let from = start;
   let to = end;
-  if (dir === 'down') to = Math.min(end, start + CHUNK - 1);
+  if (range) ({ from, to } = range);
+  else if (dir === 'down') to = Math.min(end, start + CHUNK - 1);
   else if (dir === 'up') from = Math.max(start, end - CHUNK + 1);
 
   const { path, rev } = row.dataset;
@@ -161,11 +177,12 @@ async function expandBoundary(row, dir) {
       .join('');
     if (data.plain) noticePlain(row.closest('.file'), data.maxHighlight);
     const rows = rowsFromHtml(html);
+    if (range && from > start) splitAbove(row, start, from - 1);
     const anchor = row.upTop || row;
     rows.forEach((r) => anchor.before(r));
     if (dir === 'up' && rows.length) row.upTop = rows[0];
 
-    if (dir === 'down') row.dataset.gapStartNew = String(to + 1);
+    if (range || dir === 'down') row.dataset.gapStartNew = String(to + 1);
     else if (dir === 'up') row.dataset.gapEndNew = String(from - 1);
     else row.dataset.gapStartNew = String(end + 1);
     if (gapOf(row).size <= 0) closeBoundary(row);
@@ -190,7 +207,11 @@ document.addEventListener('prequel:reveal-line', (e) => {
     const { start, end } = gapOf(row);
     const offset = parseInt(row.dataset.offset, 10) || 0;
     const n = side === 'old' ? line - offset : line;
-    if (n >= start && n <= end) return expandBoundary(row, 'all');
+    if (n < start || n > end) continue;
+    let from = Math.max(start, n - Math.floor(CHUNK / 2));
+    const to = Math.min(end, from + CHUNK - 1);
+    from = Math.max(start, to - CHUNK + 1);
+    return expandBoundary(row, 'mid', { from, to });
   }
 });
 
@@ -200,7 +221,9 @@ async function expandAll(file) {
 }
 
 function collapseAll(file) {
-  file.querySelectorAll('tr.context-loaded, tr.context-notice').forEach((r) => r.remove());
+  file
+    .querySelectorAll('tr.context-loaded, tr.context-notice, tr[data-expander][data-split]')
+    .forEach((r) => r.remove());
   for (const row of file.querySelectorAll('tr[data-expander]')) {
     row.dataset.gapStartNew = row.dataset.gapStartOrig;
     row.dataset.gapEndNew = row.dataset.gapEndOrig;

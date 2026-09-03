@@ -15,9 +15,7 @@
     <div class="pr-subnav-inner">
       <div class="pr-title-row">
         <% if (treeHtml) { %>
-        <button class="tree-pane-toggle" title="Toggle file tree" aria-label="Toggle file tree">
-          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25H5V1.5Zm4.75 0v13h7.75a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25Z"></path></svg>
-        </button>
+        <%- include('partials/tree-toggle') %>
         <% } %>
         <h1 class="pr-title">Files changed</h1>
         <span class="pr-refs">
@@ -62,11 +60,7 @@
 
   <div class="review-layout">
     <% if (treeHtml) { %>
-    <aside class="file-tree-pane" aria-label="Changed files">
-      <div class="tree-header">Files changed</div>
-      <nav class="file-tree"><%- treeHtml %></nav>
-    </aside>
-    <div class="tree-resizer" role="separator" aria-orientation="vertical" aria-label="Resize file pane" title="Drag to resize"></div>
+    <%- include('partials/tree-pane', { label: 'Changed files', header: 'Files changed', treeHtml }) %>
     <% } %>
     <main class="diff-container">
       <% if (error) { %>
