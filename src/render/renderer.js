@@ -339,7 +339,14 @@ const TREE_CHEVRON =
 const CHECK_ICON =
   '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"></path></svg>';
 
-function renderTreeNode(node, depth) {
+const DIFF_TREE = {
+  href: (file) => `#diff-${file.id}`,
+  counts: (file) =>
+    `<span class="tree-counts"><span class="tree-add">+${file.additions}</span> <span class="tree-del">−${file.deletions}</span></span>`,
+  active: () => false,
+};
+
+function renderTreeNode(node, depth, opts = DIFF_TREE) {
   let html = '';
   const dirs = [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name));
   for (const dir of dirs) {
@@ -351,18 +358,19 @@ function renderTreeNode(node, depth) {
       FOLDER_ICON +
       `<span class="tree-name">${escapeHtml(dir.name)}</span>` +
       `</div>` +
-      `<div class="tree-children">${renderTreeNode(dir, depth + 1)}</div>` +
+      `<div class="tree-children">${renderTreeNode(dir, depth + 1, opts)}</div>` +
       `</div>`;
   }
   const files = [...node.files].sort((a, b) => a.name.localeCompare(b.name));
   for (const { name, file } of files) {
     const pad = 8 + depth * 14 + 14;
+    const cls = opts.active(file) ? 'tree-row tree-file-row is-active' : 'tree-row tree-file-row';
     html +=
-      `<a class="tree-row tree-file-row" href="#diff-${file.id}" data-file-id="${file.id}"` +
+      `<a class="${cls}" href="${escapeHtml(opts.href(file))}" data-file-id="${file.id}"` +
       ` style="padding-left:${pad}px" title="${escapeHtml(file.newPath)}">` +
       `<span class="tree-status tree-status-${file.status}" aria-hidden="true"></span>` +
       `<span class="tree-name">${escapeHtml(name)}</span>` +
-      `<span class="tree-counts"><span class="tree-add">+${file.additions}</span> <span class="tree-del">−${file.deletions}</span></span>` +
+      opts.counts(file) +
       `<span class="tree-check" aria-hidden="true">${CHECK_ICON}</span>` +
       `</a>`;
   }
@@ -371,6 +379,46 @@ function renderTreeNode(node, depth) {
 
 export function renderFileTree(diff) {
   return renderTreeNode(buildTree(diff.files), 0);
+}
+
+const encodePath = (p) => p.split('/').map(encodeURIComponent).join('/');
+
+// Whole-repository tree for the file page. `changedByPath` maps a path to its
+// diff status; everything else renders as unchanged with no counts.
+export function renderRepoTree(paths, { changedByPath, activePath, query }) {
+  const files = paths.map((p, i) => ({
+    id: `f${i}`,
+    newPath: p,
+    oldPath: p,
+    status: changedByPath.get(p) || 'unchanged',
+    additions: 0,
+    deletions: 0,
+  }));
+  const opts = {
+    href: (file) => `/file/${encodePath(file.newPath)}${query ? `?${query}` : ''}`,
+    counts: () => '',
+    active: (file) => file.newPath === activePath,
+  };
+  return renderTreeNode(buildTree(files), 0, opts);
+}
+
+// Full file as a one-column unified table so the comment layer anchors on it
+// like any diff. `changed` holds new-side line numbers to tint in the gutter.
+export function renderFileView({ path: filePath, lines, html, changed, commentable }) {
+  let rows = '';
+  for (let i = 0; i < lines.length; i++) {
+    const n = i + 1;
+    const cls = changed.has(n) ? 'blob-num-addition' : 'blob-num-context';
+    const num = numCell(n, cls, commentable ? { side: 'new', line: n } : null);
+    rows += `<tr>${num}${codeCell('context', { content: lines[i], html: html ? html[i] : null })}</tr>`;
+  }
+  return (
+    `<div class="file file-view" data-path="${escapeHtml(filePath)}">` +
+    '<div class="file-body"><div class="file-comments"></div>' +
+    '<table class="diff-table diff-table-unified blob-view">' +
+    '<colgroup><col class="col-num"><col class="col-code"></colgroup>' +
+    `<tbody>${rows}</tbody></table></div></div>`
+  );
 }
 
 export function renderDiff(diff, { view = 'split', rev = null } = {}) {

@@ -99,49 +99,79 @@ export async function getDiff(repoRoot, { base, mode = 'all' } = {}) {
   const baseRef = base || (await getDefaultBase(repoRoot));
 
   let patch = '';
+  let baseRev = 'HEAD';
   if (mode === 'working') {
     patch = await git(repoRoot, ['diff', ...DIFF_FLAGS, 'HEAD']);
     patch += await untrackedPatches(repoRoot);
   } else if (mode === 'branch') {
-    const mb = await mergeBase(repoRoot, baseRef);
-    patch = await git(repoRoot, ['diff', ...DIFF_FLAGS, mb, 'HEAD']);
+    baseRev = await mergeBase(repoRoot, baseRef);
+    patch = await git(repoRoot, ['diff', ...DIFF_FLAGS, baseRev, 'HEAD']);
   } else {
     // all
-    const mb = await mergeBase(repoRoot, baseRef);
-    patch = await git(repoRoot, ['diff', ...DIFF_FLAGS, mb]);
+    baseRev = await mergeBase(repoRoot, baseRef);
+    patch = await git(repoRoot, ['diff', ...DIFF_FLAGS, baseRev]);
     patch += await untrackedPatches(repoRoot);
   }
 
-  return { patch, head, base: baseRef, mode };
+  return { patch, head, base: baseRef, baseRev, mode };
 }
 
-// Fetch a contiguous range of lines from a file for hunk-context expansion.
-// rev === 'WORKTREE' reads the on-disk file (matches what's shown for
-// all/working modes, including uncommitted edits); otherwise `git show rev:path`.
-// start/end are 1-based inclusive. `eof` is true when `end` reached past the
-// last line, so the caller can stop offering further downward expansion.
-async function readBlob(repoRoot, rev, filePath) {
+// Absolute on-disk path for a repo-relative file, or null when it escapes the repo.
+function insideRepo(repoRoot, filePath) {
+  const root = path.resolve(repoRoot);
+  const abs = path.resolve(root, filePath);
+  return abs.startsWith(root + path.sep) ? abs : null;
+}
+
+// Whole-file text. rev === 'WORKTREE' reads the on-disk file (matches what's
+// shown for all/working modes, including uncommitted edits); otherwise
+// `git show rev:path`. Unreadable or escaping paths yield ''.
+export async function getBlobText(repoRoot, { rev, path: filePath }) {
   if (rev === 'WORKTREE') {
-    const abs = path.join(repoRoot, filePath);
-    // guard against path traversal escaping the repo
-    if (!abs.startsWith(path.resolve(repoRoot) + path.sep)) return '';
+    const abs = insideRepo(repoRoot, filePath);
+    if (!abs) return '';
     return fs.readFile(abs, 'utf8').catch(() => '');
   }
   return git(repoRoot, ['show', `${rev}:${filePath}`]).catch(() => '');
 }
 
-function splitLines(content) {
+export async function blobExists(repoRoot, { rev, path: filePath }) {
+  if (rev === 'WORKTREE') {
+    const abs = insideRepo(repoRoot, filePath);
+    if (!abs) return false;
+    return fs
+      .stat(abs)
+      .then((st) => st.isFile())
+      .catch(() => false);
+  }
+  return git(repoRoot, ['cat-file', '-e', `${rev}:${filePath}`])
+    .then(() => true)
+    .catch(() => false);
+}
+
+export async function getRepoFiles(repoRoot, { rev }) {
+  const out =
+    rev === 'WORKTREE'
+      ? await git(repoRoot, ['ls-files', '--cached', '--others', '--exclude-standard'])
+      : await git(repoRoot, ['ls-tree', '-r', '--name-only', rev]);
+  return [...new Set(out.split('\n').map((s) => s.trim()).filter(Boolean))].sort();
+}
+
+export function splitLines(content) {
   const all = content.split('\n');
   if (all.length && all[all.length - 1] === '') all.pop(); // drop trailing newline artifact
   return all;
 }
 
 export async function getLineCount(repoRoot, { rev, path: filePath }) {
-  return splitLines(await readBlob(repoRoot, rev, filePath)).length;
+  return splitLines(await getBlobText(repoRoot, { rev, path: filePath })).length;
 }
 
+// Fetch a contiguous range of lines from a file for hunk-context expansion.
+// start/end are 1-based inclusive. `eof` is true when `end` reached past the
+// last line, so the caller can stop offering further downward expansion.
 export async function getBlobLines(repoRoot, { rev, path: filePath, start, end }) {
-  const all = splitLines(await readBlob(repoRoot, rev, filePath));
+  const all = splitLines(await getBlobText(repoRoot, { rev, path: filePath }));
   const from = Math.max(1, start);
   const lines = all.slice(from - 1, end);
   return { lines, from, eof: end >= all.length };
