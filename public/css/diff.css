@@ -1352,6 +1352,17 @@ body {
 .suggestion.is-queued .suggestion-header {
   color: var(--fgColor-done, #8250df);
 }
+.suggestion.is-applied .suggestion-header {
+  color: var(--fgColor-success, #1a7f37);
+}
+.suggestion-actions button.is-busy {
+  opacity: 0.6;
+  cursor: progress;
+}
+.file.is-refreshing {
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
 .suggestion-diff {
   width: 100%;
   border-collapse: collapse;

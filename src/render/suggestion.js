@@ -15,24 +15,34 @@ export function parseSuggestions(body) {
 const row = (cls, marker, line) =>
   `<tr><td class="blob-code ${cls}"><span class="blob-code-inner"><span class="marker">${marker}</span>${escapeHtml(line)}</span></td></tr>`;
 
-export function renderSuggestionBlock({ removed, added, applicable, handoff, id }) {
+export function renderSuggestionBlock({ removed, added, applicable, handoff, applied, id }) {
   const queued = handoff === 'agent';
-  const label = queued ? 'Queued for agent' : applicable === false ? 'Outdated' : 'Suggested change';
-  const state = queued ? 'is-queued' : applicable === false ? 'is-outdated' : '';
+  const label = applied
+    ? 'Applied'
+    : queued
+      ? 'Queued for agent'
+      : applicable === false
+        ? 'Outdated'
+        : 'Suggested change';
+  const state = applied ? 'is-applied' : queued ? 'is-queued' : applicable === false ? 'is-outdated' : '';
   const rows =
     removed.map((l) => row('blob-code-deletion', '-', l)).join('') +
     added.map((l) => row('blob-code-addition', '+', l)).join('');
-  const apply = queued
+  const apply = applied
     ? ''
+    : queued
+      ? ''
     : applicable === false
-      ? `<button class="suggestion-apply" disabled title="The file changed since this comment">Apply now</button>`
-      : `<button class="suggestion-apply">Apply now</button>`;
-  const hand = queued ? '' : `<button class="suggestion-handoff">Let agent do it</button>`;
+        ? `<button class="suggestion-apply" disabled title="The file changed since this comment">Apply now</button>`
+        : `<button class="suggestion-apply">Apply now</button>`;
+  const hand = applied || queued ? '' : `<button class="suggestion-handoff">Let agent do it</button>`;
   return (
     `<div class="suggestion${state ? ` ${state}` : ''}"${id ? ` data-comment-id="${escapeHtml(id)}"` : ''}>` +
     `<div class="suggestion-header"><span class="suggestion-label">${label}</span></div>` +
     `<table class="suggestion-diff"><tbody>${rows}</tbody></table>` +
-    `<div class="suggestion-actions">${apply}${hand}<span class="suggestion-error" hidden></span></div>` +
+    (apply || hand
+      ? `<div class="suggestion-actions">${apply}${hand}<span class="suggestion-error" hidden></span></div>`
+      : '') +
     `</div>`
   );
 }

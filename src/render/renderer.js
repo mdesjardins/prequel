@@ -436,6 +436,10 @@ export function renderFileView({ path: filePath, lines, html, changed, commentab
   );
 }
 
+export function renderFileHtml(file, { view = 'split', rev = null, query = '' } = {}) {
+  return renderFile(file, view, rev, query);
+}
+
 export function renderDiff(diff, { view = 'split', rev = null, query = '' } = {}) {
   const totalAdd = diff.files.reduce((a, f) => a + f.additions, 0);
   const totalDel = diff.files.reduce((a, f) => a + f.deletions, 0);

@@ -2,7 +2,14 @@ import express from 'express';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { binaryNotice, renderDiff, renderFileTree, renderFileView, renderRepoTree } from './render/renderer.js';
+import {
+  binaryNotice,
+  renderDiff,
+  renderFileHtml,
+  renderFileTree,
+  renderFileView,
+  renderRepoTree,
+} from './render/renderer.js';
 import { highlightDiff, highlightLines } from './render/highlighter.js';
 import { annotateWordDiffs } from './render/wordDiff.js';
 import {
@@ -13,6 +20,7 @@ import {
   blobExists,
   getRepoFiles,
   splitLines,
+  insideRepo,
 } from './git/gitService.js';
 import { parseDiff, inferLanguage } from './git/diffParser.js';
 import { sampleDiff } from './sampleDiff.js';
@@ -44,7 +52,10 @@ const isLineRoot = (c) => c && c.side !== 'file' && !c.parentId;
 
 // Render a comment body; `suggestion` fences on a root line comment become a
 // mini diff against the snapshot, everywhere else they stay plain code.
-export function renderCommentHtml(c, { snapshot = [], applicable = null, handoff = null } = {}) {
+export function renderCommentHtml(
+  c,
+  { snapshot = [], applicable = null, handoff = null, applied = false } = {}
+) {
   if (!isLineRoot(c)) return renderMarkdown(c.body);
   const renderer = new marked.Renderer();
   renderer.html = mdRenderer.html;
@@ -52,7 +63,7 @@ export function renderCommentHtml(c, { snapshot = [], applicable = null, handoff
   renderer.code = (code, lang, escaped) => {
     if ((lang || '').trim() !== 'suggestion') return base(code, lang, escaped);
     const added = code === '' ? [] : code.split(/\r?\n/);
-    return renderSuggestionBlock({ removed: snapshot, added, applicable, handoff, id: c.id });
+    return renderSuggestionBlock({ removed: snapshot, added, applicable, handoff, applied, id: c.id });
   };
   return marked.parse(c.body || '', { renderer });
 }
@@ -83,7 +94,12 @@ function decorator(repoRoot) {
     const applicable = snapshot.length > 0 && sameLines(cur, snapshot);
     return {
       ...c,
-      bodyHtml: renderCommentHtml(c, { snapshot, applicable, handoff: c.handoff || null }),
+      bodyHtml: renderCommentHtml(c, {
+        snapshot,
+        applicable,
+        handoff: c.handoff || null,
+        applied: Boolean(c.applied),
+      }),
       suggestion: { lines: sug.lines },
       applicable,
     };
@@ -147,6 +163,57 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     return { ...result, diff: parseDiff(result.patch) };
   }
 
+  // Which revision the "new" side comes from, for context expansion:
+  // branch mode diffs against HEAD; all/working show the working tree.
+  const revFor = (diffMode) => (!repoRoot ? null : diffMode === 'branch' ? 'HEAD' : 'WORKTREE');
+
+  async function prepareDiff(diff, rev) {
+    annotateWordDiffs(diff); // intra-line changed ranges (before highlighting)
+    await highlightDiff(diff); // attaches per-line highlighted HTML in place
+    if (!repoRoot) return;
+    await Promise.all(
+      diff.files
+        .filter((f) => !f.isBinary && f.status !== 'removed')
+        .map(async (f) => {
+          f.newLineCount = await getLineCount(repoRoot, { rev, path: f.newPath });
+        })
+    );
+  }
+
+  // Writes a suggestion into the working tree when the snapshot still matches.
+  // Returns { status, body } shaped like the HTTP response.
+  async function applySuggestion(c) {
+    if (!isLineRoot(c) || c.side !== 'new') return { status: 400, body: { error: 'not a new-side line comment' } };
+    const sug = parseSuggestions(c.body)[0];
+    if (!sug) return { status: 400, body: { error: 'no suggestion' } };
+    const rel = safeRelPath(c.filePath);
+    const abs = rel && insideRepo(repoRoot, rel);
+    if (!abs) return { status: 400, body: { error: 'invalid path' } };
+    if (c.applied) return { status: 409, body: { error: 'already applied', outdated: true } };
+    let text;
+    try {
+      text = await fs.readFile(abs, 'utf8');
+    } catch {
+      return { status: 409, body: { error: 'file missing', outdated: true } };
+    }
+    const nl = text.includes('\r\n') ? '\r\n' : '\n';
+    const trailing = text.endsWith('\n');
+    const all = splitLines(trailing ? text : text + '\n').map((l) => l.replace(/\r$/, ''));
+    const snapshot = Array.isArray(c.lineSnapshot) ? c.lineSnapshot : [];
+    const cur = all.slice(c.startLine - 1, c.endLine);
+    if (!snapshot.length || !sameLines(cur, snapshot)) return { status: 409, body: { error: 'outdated', outdated: true } };
+    const next = [...all.slice(0, c.startLine - 1), ...sug.lines, ...all.slice(c.endLine)];
+    const out = next.join(nl) + (trailing ? nl : '');
+    const tmp = `${abs}.prequel-${process.pid}-${Date.now()}.tmp`;
+    await fs.writeFile(tmp, out);
+    await fs.rename(tmp, abs);
+    const comment = await updateComment(repoRoot, c.id, {
+      status: 'resolved',
+      applied: { at: new Date().toISOString(), lines: sug.lines },
+    });
+    return { status: 200, body: { comment }, path: rel };
+  }
+
   app.set('view engine', 'ejs');
   app.set('views', path.join(projectRoot, 'views'));
 
@@ -184,20 +251,8 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
       base = sampleDiff.base;
     }
 
-    annotateWordDiffs(diff); // intra-line changed ranges (before highlighting)
-    await highlightDiff(diff); // attaches per-line highlighted HTML in place
-    // Which revision the "new" side comes from, for context expansion:
-    // branch mode diffs against HEAD; all/working show the working tree.
-    const rev = !repoRoot ? null : diffMode === 'branch' ? 'HEAD' : 'WORKTREE';
-    if (repoRoot) {
-      await Promise.all(
-        diff.files
-          .filter((f) => !f.isBinary && f.status !== 'removed')
-          .map(async (f) => {
-            f.newLineCount = await getLineCount(repoRoot, { rev, path: f.newPath });
-          })
-      );
-    }
+    const rev = revFor(diffMode);
+    await prepareDiff(diff, rev);
     const { filesHtml, summary } = renderDiff(diff, { view, rev, query });
     const treeHtml = diff.files.length ? renderFileTree(diff) : '';
     res.render('review', {
@@ -434,6 +489,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     const patch = {};
     if (typeof b.body === 'string') patch.body = b.body;
     if (b.status === 'open' || b.status === 'resolved') patch.status = b.status;
+    if (b.handoff === 'agent' || b.handoff === null) patch.handoff = b.handoff;
     const comment = await updateComment(repoRoot, req.params.id, patch);
     if (!comment) return res.status(404).json({ error: 'not found' });
     const out = await decorator(repoRoot)(comment);
@@ -446,6 +502,66 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     const removed = await deleteComment(repoRoot, req.params.id);
     if (removed) emit('comment.deleted', { id: req.params.id }, req);
     res.json({ ok: Boolean(removed), removed });
+  });
+
+  app.post('/api/comments/:id/apply', async (req, res) => {
+    if (!repoRoot) return res.status(400).json({ error: 'no repo' });
+    const c = await getComment(repoRoot, req.params.id);
+    if (!c) return res.status(404).json({ error: 'not found' });
+    const r = await applySuggestion(c);
+    if (r.status !== 200) return res.status(r.status).json(r.body);
+    const out = await decorator(repoRoot)(r.body.comment);
+    emit('comment.updated', { comment: out }, req);
+    emit('diff.changed', { path: r.path }, req);
+    res.json({ comment: out });
+  });
+
+  // Applies every open, applicable, unflagged suggestion; bottom-up per file so
+  // an earlier apply cannot shift the line numbers of a later one.
+  app.post('/api/suggestions/apply-all', async (req, res) => {
+    if (!repoRoot) return res.status(400).json({ error: 'no repo' });
+    const branch = req.query.branch ? String(req.query.branch) : null;
+    const all = await listComments(repoRoot, branch);
+    const candidates = all
+      .filter((c) => isLineRoot(c) && c.side === 'new' && c.status === 'open' && c.handoff !== 'agent')
+      .filter((c) => parseSuggestions(c.body).length > 0)
+      .sort((a, b) => (a.filePath < b.filePath ? -1 : a.filePath > b.filePath ? 1 : b.startLine - a.startLine));
+    const applied = [];
+    const skipped = [];
+    const changed = new Set();
+    for (const c of candidates) {
+      const r = await applySuggestion(c);
+      if (r.status !== 200) {
+        skipped.push({ id: c.id, reason: r.body.outdated ? 'outdated' : r.body.error });
+        continue;
+      }
+      applied.push(c.id);
+      changed.add(r.path);
+      emit('comment.updated', { comment: await decorator(repoRoot)(r.body.comment) }, req);
+    }
+    for (const p of changed) emit('diff.changed', { path: p }, req);
+    res.json({ applied, skipped });
+  });
+
+  // One file's diff section, re-rendered from the current working tree so the
+  // client can swap it in place after an apply.
+  app.get('/api/file-diff', async (req, res) => {
+    if (!repoRoot) return res.status(400).json({ error: 'no repo' });
+    const rel = safeRelPath(req.query.path);
+    if (!rel) return res.status(400).json({ error: 'invalid path' });
+    const { view, diffMode, requestedBase, query } = pageParams(req.query, defaultBase);
+    let diff;
+    try {
+      diff = (await loadDiff(diffMode, requestedBase)).diff;
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    const file = diff.files.find((f) => f.newPath === rel);
+    if (!file) return res.status(404).json({ error: 'not in diff' });
+    diff.files = [file];
+    const rev = revFor(diffMode);
+    await prepareDiff(diff, rev);
+    res.type('html').send(renderFileHtml(file, { view, rev, query }));
   });
 
   // Bulk clear (with undo) for a clean slate between review rounds.

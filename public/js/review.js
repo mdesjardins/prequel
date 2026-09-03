@@ -323,7 +323,7 @@ function saveViewed(state) {
 }
 
 const viewedState = loadViewed();
-document.querySelectorAll('.viewed-checkbox').forEach((cb) => {
+function initViewed(cb) {
   const id = cb.getAttribute('data-file-id');
   if (viewedState[id]) {
     cb.checked = true;
@@ -336,4 +336,17 @@ document.querySelectorAll('.viewed-checkbox').forEach((cb) => {
     cb.closest('.file').classList.toggle('is-collapsed', cb.checked);
     markTreeViewed(id, cb.checked);
   });
-});
+}
+document.querySelectorAll('.viewed-checkbox').forEach(initViewed);
+
+// Re-initialise a `.file` section that was swapped in from /api/file-diff.
+window.prequelReview = {
+  refreshFile(file) {
+    file.querySelectorAll('tr[data-expander]').forEach(decorateBoundary);
+    syncExpandAll(file);
+    file.querySelectorAll('.viewed-checkbox').forEach(initViewed);
+    document.dispatchEvent(
+      new CustomEvent('prequel:context-loaded', { detail: { filePath: file.dataset.path } })
+    );
+  },
+};

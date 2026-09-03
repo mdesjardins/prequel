@@ -32,6 +32,146 @@
         commentCount === 1 ? 'Export 1 comment for Claude' : `Export ${commentCount} comments for Claude`;
     }
     if (clearBtn) clearBtn.hidden = commentCount === 0;
+    updateApplyAll();
+  }
+
+  const applyAllBtn = document.getElementById('apply-all-btn');
+  const canApply = (c) =>
+    !c.parentId && c.side === 'new' && c.status === 'open' && c.applicable === true && c.handoff !== 'agent';
+
+  function updateApplyAll() {
+    if (!applyAllBtn) return;
+    const n = [...rendered.values()].filter(({ c }) => canApply(c)).length;
+    applyAllBtn.hidden = n === 0;
+    applyAllBtn.textContent = n === 1 ? 'Apply 1 suggestion' : `Apply ${n} suggestions`;
+  }
+
+  async function runApplyAll() {
+    applyAllBtn.disabled = true;
+    try {
+      const res = await fetch(`/api/suggestions/apply-all?branch=${encodeURIComponent(branch)}`, {
+        method: 'POST',
+        headers: jsonHeaders(),
+      });
+      const { applied, skipped } = await res.json();
+      const n = applied.length;
+      const skippedMsg = skipped.length ? `, ${skipped.length} skipped` : '';
+      toast(`Applied ${n} suggestion${n === 1 ? '' : 's'}${skippedMsg}`);
+      await syncApplied(applied);
+    } catch {
+      toast('Apply failed');
+    } finally {
+      applyAllBtn.disabled = false;
+    }
+  }
+  if (applyAllBtn) applyAllBtn.addEventListener('click', runApplyAll);
+
+  function showSuggestionError(block, msg) {
+    const el = block.querySelector('.suggestion-error');
+    if (!el) return;
+    el.textContent = msg;
+    el.hidden = false;
+  }
+
+  async function applySuggestion(btn) {
+    const block = btn.closest('.suggestion');
+    const id = block.dataset.commentId;
+    btn.disabled = true;
+    btn.classList.add('is-busy');
+    try {
+      const res = await fetch(`/api/comments/${id}/apply`, { method: 'POST', headers: jsonHeaders() });
+      const data = await res.json();
+      if (!res.ok) {
+        const msg = data.outdated ? 'The file changed since this comment' : data.error || 'Apply failed';
+        if (data.outdated) await refreshCard(id);
+        const cur = document.querySelector(`.suggestion[data-comment-id="${CSS.escape(id)}"]`) || block;
+        showSuggestionError(cur, msg);
+        return;
+      }
+      applyStatus(data.comment);
+      refreshFileDiff(data.comment.filePath);
+    } catch {
+      showSuggestionError(block, 'Apply failed');
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('is-busy');
+    }
+  }
+
+  async function handoffSuggestion(btn) {
+    const block = btn.closest('.suggestion');
+    const id = block.dataset.commentId;
+    btn.disabled = true;
+    try {
+      const res = await fetch(`/api/comments/${id}`, {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ handoff: 'agent' }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showSuggestionError(block, data.error || 'Could not queue');
+        return;
+      }
+      applyStatus(data.comment);
+    } catch {
+      showSuggestionError(block, 'Could not queue');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function syncApplied(ids) {
+    if (!ids.length) return;
+    const res = await fetch(`/api/comments?branch=${encodeURIComponent(branch)}`);
+    const { comments } = await res.json();
+    const paths = new Set();
+    for (const c of comments) {
+      if (!ids.includes(c.id)) continue;
+      applyStatus(c);
+      paths.add(c.filePath);
+    }
+    await Promise.all([...paths].map(refreshFileDiff));
+  }
+
+  async function refreshCard(id) {
+    try {
+      const res = await fetch(`/api/comments?branch=${encodeURIComponent(branch)}`);
+      const { comments } = await res.json();
+      const c = comments.find((x) => x.id === id);
+      if (c) applyStatus(c);
+    } catch {
+      /* keep the stale card */
+    }
+  }
+
+  // Re-render one file section from the working tree and re-anchor its threads.
+  async function refreshFileDiff(filePath) {
+    const file = document.querySelector(`.file[data-path="${CSS.escape(filePath)}"]`);
+    if (!file || !window.prequelReview) return;
+    const params = new URLSearchParams(location.search);
+    params.set('path', filePath);
+    params.set('view', document.documentElement.getAttribute('data-view') || '');
+    params.set('diff', document.documentElement.getAttribute('data-diff') || '');
+    file.classList.add('is-refreshing');
+    let html;
+    try {
+      const res = await fetch(`/api/file-diff?${params}`);
+      if (!res.ok) throw new Error(String(res.status));
+      html = await res.text();
+    } catch {
+      file.classList.remove('is-refreshing');
+      return;
+    }
+    for (const [id, entry] of rendered) {
+      if (entry.c.filePath === filePath) pending.set(id, entry);
+    }
+    const wasCollapsed = file.classList.contains('is-collapsed');
+    file.outerHTML = html;
+    const next = document.querySelector(`.file[data-path="${CSS.escape(filePath)}"]`);
+    if (!next) return;
+    next.classList.toggle('is-collapsed', wasCollapsed);
+    window.prequelReview.refreshFile(next);
   }
 
   // --- toast (with optional action) --------------------------------------
@@ -341,6 +481,7 @@
     const isRoot = thread && thread.dataset.rootId === c.id;
     card.outerHTML = commentCardHtml(c, { isRoot: Boolean(isRoot) });
     if (isRoot) thread.classList.toggle('is-resolved', c.status === 'resolved');
+    updateApplyAll();
   }
 
   async function submitReply(form) {
@@ -438,6 +579,7 @@
     commentCount = threads.length; // the button counts asks, not messages
     updateButtons();
     threads.forEach(({ root, replies }) => renderComment(root, replies));
+    updateApplyAll();
   }
 
   async function runExport() {
@@ -576,6 +718,18 @@
       compose.querySelector('.comment-input').focus();
       return;
     }
+    const applyBtn = e.target.closest('.suggestion-apply');
+    if (applyBtn) {
+      e.preventDefault();
+      applySuggestion(applyBtn);
+      return;
+    }
+    const handoffBtn = e.target.closest('.suggestion-handoff');
+    if (handoffBtn) {
+      e.preventDefault();
+      handoffSuggestion(handoffBtn);
+      return;
+    }
     const resolve = e.target.closest('.comment-resolve');
     if (resolve) {
       e.preventDefault();
@@ -644,6 +798,10 @@
   // Apply changes made outside this tab (Claude working the review via the
   // API, or a second browser window) without a reload.
   function applyRemote(msg) {
+    if (msg.type === 'diff.changed') {
+      if (msg.origin !== CLIENT_ID) refreshFileDiff(msg.path);
+      return;
+    }
     if (msg.origin === CLIENT_ID) return; // our own change, already applied
     switch (msg.type) {
       case 'comment.created': {

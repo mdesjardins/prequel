@@ -120,7 +120,7 @@ export async function getDiff(repoRoot, { base, mode = 'all' } = {}) {
 }
 
 // Absolute on-disk path for a repo-relative file, or null when it escapes the repo.
-function insideRepo(repoRoot, filePath) {
+export function insideRepo(repoRoot, filePath) {
   const root = path.resolve(repoRoot);
   const abs = path.resolve(root, filePath);
   return abs.startsWith(root + path.sep) ? abs : null;
