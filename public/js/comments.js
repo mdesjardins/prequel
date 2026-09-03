@@ -66,6 +66,32 @@
   }
   if (applyAllBtn) applyAllBtn.addEventListener('click', runApplyAll);
 
+  async function toggleTask(box) {
+    const card = box.closest('.comment');
+    const id = card.dataset.commentId;
+    const checked = box.checked;
+    box.disabled = true;
+    try {
+      const res = await fetch(`/api/comments/${id}`, {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ taskIndex: Number(box.dataset.taskIndex), checked }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || 'update failed');
+      applyStatus((await res.json()).comment);
+    } catch (err) {
+      box.checked = !checked;
+      box.disabled = false;
+      let el = card.querySelector('.task-error');
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'task-error';
+        card.querySelector('.comment-body').after(el);
+      }
+      el.textContent = err.message;
+    }
+  }
+
   function showSuggestionError(block, msg) {
     const el = block.querySelector('.suggestion-error');
     if (!el) return;
@@ -716,6 +742,11 @@
         window.prequelComposer.mount(compose.querySelector('.comment-compose'));
       }
       compose.querySelector('.comment-input').focus();
+      return;
+    }
+    const task = e.target.closest('input.task-item');
+    if (task) {
+      toggleTask(task);
       return;
     }
     const applyBtn = e.target.closest('.suggestion-apply');

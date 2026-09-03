@@ -29,6 +29,7 @@ import {
   addComment,
   getComment,
   updateComment,
+  updateCommentWith,
   deleteComment,
   clearComments,
   restoreCleared,
@@ -42,12 +43,44 @@ import { parseSuggestions, renderSuggestionBlock } from './render/suggestion.js'
 const escapeHtml = (s) =>
   String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-const mdRenderer = new marked.Renderer();
-mdRenderer.html = (html) => escapeHtml(html);
-marked.setOptions({ breaks: true, renderer: mdRenderer });
+marked.setOptions({ breaks: true });
+
+const MENTION = /(^|[^\w@])@agent(?![\w-])/g;
+
+// A fresh renderer per parse: raw HTML is escaped, task items become enabled
+// indexed checkboxes, and @agent becomes a mention.
+function commentRenderer() {
+  const r = new marked.Renderer();
+  let task = 0;
+  r.html = (html) => escapeHtml(html);
+  r.checkbox = (checked) =>
+    `<input type="checkbox" class="task-item" data-task-index="${task++}"${checked ? ' checked' : ''}>`;
+  r.text = (text) => text.replace(MENTION, '$1<span class="mention mention-agent">@agent</span>');
+  return r;
+}
 
 export function renderMarkdown(body) {
-  return marked.parse(body || '');
+  return marked.parse(body || '', { renderer: commentRenderer() });
+}
+
+const TASK = /^(\s*(?:[-*+]|\d+[.)])\s+\[)( |x|X)(\])/;
+
+// Rewrite the nth task marker (source order, fences skipped); null when absent.
+export function toggleTask(body, idx, checked) {
+  const lines = String(body || '').split('\n');
+  let fence = false;
+  let n = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*(```|~~~)/.test(lines[i])) fence = !fence;
+    if (fence) continue;
+    const m = TASK.exec(lines[i]);
+    if (!m) continue;
+    if (n++ === idx) {
+      lines[i] = lines[i].replace(TASK, `$1${checked ? 'x' : ' '}$3`);
+      return lines.join('\n');
+    }
+  }
+  return null;
 }
 
 const isLineRoot = (c) => c && c.side !== 'file' && !c.parentId;
@@ -59,8 +92,7 @@ export function renderCommentHtml(
   { snapshot = [], applicable = null, handoff = null, applied = false } = {}
 ) {
   if (!isLineRoot(c)) return renderMarkdown(c.body);
-  const renderer = new marked.Renderer();
-  renderer.html = mdRenderer.html;
+  const renderer = commentRenderer();
   const base = renderer.code.bind(renderer);
   renderer.code = (code, lang, escaped) => {
     if ((lang || '').trim() !== 'suggestion') return base(code, lang, escaped);
@@ -512,8 +544,20 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     if (typeof b.body === 'string') patch.body = b.body;
     if (b.status === 'open' || b.status === 'resolved') patch.status = b.status;
     if (b.handoff === 'agent' || b.handoff === null) patch.handoff = b.handoff;
-    const comment = await updateComment(repoRoot, req.params.id, patch);
-    if (!comment) return res.status(404).json({ error: 'not found' });
+    let comment;
+    if (b.taskIndex !== undefined) {
+      if (!Number.isInteger(b.taskIndex) || b.taskIndex < 0) return res.status(400).json({ error: 'bad taskIndex' });
+      const out = await updateCommentWith(repoRoot, req.params.id, (c) => {
+        const body = toggleTask(c.body, b.taskIndex, Boolean(b.checked));
+        return body === null ? null : { ...patch, body };
+      });
+      if (!out) return res.status(404).json({ error: 'not found' });
+      if (out.rejected) return res.status(400).json({ error: 'taskIndex out of range' });
+      comment = out;
+    } else {
+      comment = await updateComment(repoRoot, req.params.id, patch);
+      if (!comment) return res.status(404).json({ error: 'not found' });
+    }
     const out = await decorator(repoRoot)(comment);
     emit('comment.updated', { comment: out }, req);
     res.json({ comment: out });

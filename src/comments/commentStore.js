@@ -11,7 +11,7 @@ export const prequelHome = () => process.env.PREQUEL_HOME || path.join(os.homedi
 
 export async function writeJsonAtomic(dest, data) {
   await fs.mkdir(path.dirname(dest), { recursive: true });
-  const tmp = `${dest}.${process.pid}.tmp`;
+  const tmp = `${dest}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(data, null, 2));
   await fs.rename(tmp, dest);
 }
@@ -33,12 +33,25 @@ async function readAll(repoRoot) {
 
 const writeAll = (repoRoot, comments) => writeJsonAtomic(fileFor(repoRoot), { repoRoot, comments });
 
+const locks = new Map();
+
+function locked(repoRoot, fn) {
+  const prev = locks.get(repoRoot) || Promise.resolve();
+  const next = prev.then(fn, fn);
+  locks.set(repoRoot, next.catch(() => {}));
+  return next;
+}
+
 export async function listComments(repoRoot, branch) {
   const all = await readAll(repoRoot);
   return branch ? all.filter((c) => c.branch === branch) : all;
 }
 
-export async function addComment(repoRoot, data) {
+export function addComment(repoRoot, data) {
+  return locked(repoRoot, () => addLocked(repoRoot, data));
+}
+
+async function addLocked(repoRoot, data) {
   const all = await readAll(repoRoot);
   const now = new Date().toISOString();
   const comment = {
@@ -59,18 +72,31 @@ export async function getComment(repoRoot, id) {
   return all.find((c) => c.id === id) || null;
 }
 
-export async function updateComment(repoRoot, id, patch) {
-  const all = await readAll(repoRoot);
-  const comment = all.find((c) => c.id === id);
-  if (!comment) return null;
-  Object.assign(comment, patch, { updatedAt: new Date().toISOString() });
-  await writeAll(repoRoot, all);
-  return comment;
+export function updateComment(repoRoot, id, patch) {
+  return updateCommentWith(repoRoot, id, () => patch);
+}
+
+// `fn(comment)` returns the patch to apply, or null to reject the update.
+export function updateCommentWith(repoRoot, id, fn) {
+  return locked(repoRoot, async () => {
+    const all = await readAll(repoRoot);
+    const comment = all.find((c) => c.id === id);
+    if (!comment) return null;
+    const patch = fn(comment);
+    if (!patch) return { comment, rejected: true };
+    Object.assign(comment, patch, { updatedAt: new Date().toISOString() });
+    await writeAll(repoRoot, all);
+    return comment;
+  });
 }
 
 // Deleting a root comment also deletes its replies — a reply without its
 // comment has nothing to attach to and would be invisible in the UI.
-export async function deleteComment(repoRoot, id) {
+export function deleteComment(repoRoot, id) {
+  return locked(repoRoot, () => deleteCommentLocked(repoRoot, id));
+}
+
+async function deleteCommentLocked(repoRoot, id) {
   const all = await readAll(repoRoot);
   if (!all.some((c) => c.id === id)) return false;
   const kept = all.filter((c) => c.id !== id && c.parentId !== id);
@@ -81,7 +107,11 @@ export async function deleteComment(repoRoot, id) {
 // In-memory buffer of the last bulk-clear, so the UI can offer a quick Undo.
 const lastCleared = new Map();
 
-export async function clearComments(repoRoot, branch) {
+export function clearComments(repoRoot, branch) {
+  return locked(repoRoot, () => clearCommentsLocked(repoRoot, branch));
+}
+
+async function clearCommentsLocked(repoRoot, branch) {
   const all = await readAll(repoRoot);
   const cleared = branch ? all.filter((c) => c.branch === branch) : all.slice();
   const kept = branch ? all.filter((c) => c.branch !== branch) : [];
@@ -90,7 +120,11 @@ export async function clearComments(repoRoot, branch) {
   return cleared.length;
 }
 
-export async function restoreCleared(repoRoot) {
+export function restoreCleared(repoRoot) {
+  return locked(repoRoot, () => restoreClearedLocked(repoRoot));
+}
+
+async function restoreClearedLocked(repoRoot) {
   const cleared = lastCleared.get(repoRoot);
   if (!cleared || !cleared.length) return 0;
   const all = await readAll(repoRoot);
