@@ -26,6 +26,10 @@ export async function createFixtureRepo() {
   await write(dir, 'src/old.js', 'export const gone = true;\n');
   await write(dir, 'README.md', '# fixture\n');
   await write(dir, 'empty.txt', '');
+  await write(dir, '.gitignore', 'ignored.log\n');
+  await fs.writeFile(path.join(dir, 'img.bin'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 1, 0, 0]));
+  await fs.mkdir(path.join(dir, '<img src=x onerror=1>'));
+  await write(dir, '<img src=x onerror=1>/x.js', 'export const x = 1;\n');
   await git(dir, ['add', '-A']);
   await git(dir, ['commit', '-qm', 'init']);
 
@@ -39,6 +43,7 @@ export async function createFixtureRepo() {
   await git(dir, ['add', 'src/format.js']);
   await write(dir, 'README.md', '# fixture\n\nmore\n');
   await write(dir, 'src/index.js', 'import { total } from "./cart.js";\nconsole.log(total([]));\n');
+  await write(dir, 'ignored.log', 'noise\n');
 
   return { dir, cleanup: () => fs.rm(dir, { recursive: true, force: true }) };
 }

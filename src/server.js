@@ -2,10 +2,18 @@ import express from 'express';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { renderDiff, renderFileTree } from './render/renderer.js';
+import { renderDiff, renderFileTree, renderFileView, renderRepoTree } from './render/renderer.js';
 import { highlightDiff, highlightLines } from './render/highlighter.js';
 import { annotateWordDiffs } from './render/wordDiff.js';
-import { getDiff, getBlobLines, getLineCount } from './git/gitService.js';
+import {
+  getDiff,
+  getBlobLines,
+  getLineCount,
+  getBlobText,
+  blobExists,
+  getRepoFiles,
+  splitLines,
+} from './git/gitService.js';
 import { parseDiff, inferLanguage } from './git/diffParser.js';
 import { sampleDiff } from './sampleDiff.js';
 import {
@@ -51,9 +59,38 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
 
 const DIFF_MODES = ['all', 'branch', 'working'];
+const MAX_HIGHLIGHT_LINES = 5000;
+
+// ?view=split|unified (layout); ?mode=light|dark (color); default auto.
+// ?diff=all|branch|working (which changes to show); ?base=<ref>.
+function pageParams(query, defaultBase) {
+  const view = query.view === 'unified' ? 'unified' : 'split';
+  const colorMode = ['light', 'dark'].includes(query.mode) ? query.mode : 'auto';
+  const diffMode = DIFF_MODES.includes(query.diff) ? query.diff : 'working';
+  const requestedBase =
+    (typeof query.base === 'string' && query.base ? query.base : null) || defaultBase;
+  const qs = new URLSearchParams({ view, diff: diffMode });
+  if (colorMode !== 'auto') qs.set('mode', colorMode);
+  if (typeof query.base === 'string' && query.base) qs.set('base', query.base);
+  return { view, colorMode, diffMode, requestedBase, query: qs.toString() };
+}
+
+// Repo-relative path from the URL, or null when it is absolute or escapes upward.
+function safeRelPath(raw) {
+  const p = path.posix.normalize(String(raw || ''));
+  if (!p || p === '.' || p.startsWith('/') || p === '..' || p.startsWith('../')) return null;
+  return p;
+}
+
+const isBinaryText = (text) => text.slice(0, 8192).includes('\0');
 
 export function createServer({ repoRoot = null, defaultBase = null } = {}) {
   const app = express();
+
+  async function loadDiff(diffMode, requestedBase) {
+    const result = await getDiff(repoRoot, { base: requestedBase, mode: diffMode });
+    return { ...result, diff: parseDiff(result.patch) };
+  }
 
   app.set('view engine', 'ejs');
   app.set('views', path.join(projectRoot, 'views'));
@@ -66,13 +103,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
   );
 
   app.get('/', async (req, res) => {
-    // ?view=split|unified (layout); ?mode=light|dark (color); default auto.
-    const view = req.query.view === 'unified' ? 'unified' : 'split';
-    const colorMode = ['light', 'dark'].includes(req.query.mode) ? req.query.mode : 'auto';
-    // ?diff=all|branch|working (which changes to show); ?base=<ref>.
-    const diffMode = DIFF_MODES.includes(req.query.diff) ? req.query.diff : 'working';
-    const requestedBase =
-      (typeof req.query.base === 'string' && req.query.base ? req.query.base : null) || defaultBase;
+    const { view, colorMode, diffMode, requestedBase } = pageParams(req.query, defaultBase);
 
     let diff;
     let head;
@@ -81,8 +112,8 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
 
     if (repoRoot) {
       try {
-        const result = await getDiff(repoRoot, { base: requestedBase, mode: diffMode });
-        diff = parseDiff(result.patch);
+        const result = await loadDiff(diffMode, requestedBase);
+        diff = result.diff;
         head = result.head;
         base = result.base;
       } catch (err) {
@@ -127,6 +158,71 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
       treeHtml,
       summary,
       commentsEnabled: Boolean(repoRoot),
+    });
+  });
+
+  // Whole-file view with a repository tree. Content comes from the working tree
+  // (working/all) or HEAD (branch); a deleted file shows its base revision.
+  app.get('/file/*', async (req, res) => {
+    if (!repoRoot) return res.status(404).send('no repo');
+    const filePath = safeRelPath(req.params[0]);
+    if (!filePath) return res.status(404).send('not found');
+    const { view, colorMode, diffMode, requestedBase, query } = pageParams(req.query, defaultBase);
+
+    let result;
+    try {
+      result = await loadDiff(diffMode, requestedBase);
+    } catch (err) {
+      return res.status(500).send(err.message);
+    }
+    const { diff, head, base, baseRev } = result;
+    const file = diff.files.find((f) => f.newPath === filePath || f.oldPath === filePath);
+    const isDeleted = file?.status === 'removed';
+    const viewRev = diffMode === 'branch' ? 'HEAD' : 'WORKTREE';
+    const rev = isDeleted ? baseRev : viewRev;
+
+    if (!(await blobExists(repoRoot, { rev, path: filePath }))) return res.status(404).send('not found');
+    const text = await getBlobText(repoRoot, { rev, path: filePath });
+    const isBinary = Boolean(file?.isBinary) || isBinaryText(text);
+    const commentable = Boolean(file) && !isDeleted && !isBinary;
+    const lines = isBinary ? [] : splitLines(text);
+    const plain = lines.length > MAX_HIGHLIGHT_LINES;
+    const html = plain || isBinary ? null : await highlightLines(lines, inferLanguage(filePath));
+    const changed = new Set();
+    if (file && !isDeleted) {
+      for (const h of file.hunks) for (const l of h.lines) if (l.type === 'add') changed.add(l.newNumber);
+    }
+
+    const changedByPath = new Map(diff.files.map((f) => [f.newPath, f.status]));
+    const paths = await getRepoFiles(repoRoot, { rev: viewRev });
+    for (const f of diff.files) if (f.status === 'removed') paths.push(f.newPath);
+    const treeHtml = renderRepoTree([...new Set(paths)].sort(), {
+      changedByPath,
+      activePath: filePath,
+      query,
+    });
+    const tableHtml = isBinary
+      ? '<div class="binary-notice">Binary file not shown.</div>'
+      : renderFileView({ path: filePath, lines, html, changed, commentable });
+
+    res.render('file', {
+      repoPath: repoRoot,
+      path: filePath,
+      crumbs: filePath.split('/'),
+      backHref: `/?${query}${file ? `#diff-${file.id}` : ''}`,
+      colorMode,
+      view,
+      diffMode,
+      base,
+      head,
+      branch: head,
+      isDeleted,
+      isBinary,
+      commentable,
+      plain,
+      tableHtml,
+      treeHtml,
+      lineCount: lines.length,
     });
   });
 

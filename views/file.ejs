@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en" data-color-mode="<%= colorMode %>" data-branch="<%= branch %>" data-comments-enabled="<%= commentable ? '1' : '0' %>">
+<head>
+  <meta charset="utf-8">
+  <title><%= path %> · prequel</title>
+</head>
+<body data-back-href="<%= backHref %>" data-deleted="<%= isDeleted ? '1' : '0' %>" data-plain="<%= plain ? '1' : '0' %>">
+  <a href="<%= backHref %>">Back to review</a>
+  <nav class="crumbs"><%= repoPath.split('/').pop() %><% for (const c of crumbs) { %> / <%= c %><% } %></nav>
+  <aside class="file-tree-pane"><nav class="file-tree"><%- treeHtml %></nav></aside>
+  <main><%- tableHtml %></main>
+</body>
+</html>
