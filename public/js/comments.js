@@ -291,6 +291,7 @@
   // Removing a root takes the whole thread (the server cascades its replies);
   // removing a reply takes just that card.
   function dropComment(id) {
+    pending.delete(id);
     const container = document.querySelector(`[data-root-id="${CSS.escape(id)}"]`);
     if (container) {
       container.remove();
@@ -356,7 +357,9 @@
   }
 
   // --- load, export, clear ----------------------------------------------
-  function renderComment(c, replies) {
+  const pending = new Map();
+
+  function renderComment(c, replies, { reveal = true } = {}) {
     if (c.side === 'file') {
       const file = document.querySelector(`.file[data-path="${CSS.escape(c.filePath)}"]`);
       if (file)
@@ -364,8 +367,20 @@
       return;
     }
     // ranges anchor after the end line (GitHub's convention)
-    const cell = findAnchorCell(c.filePath, c.side, c.endLine || c.startLine);
-    if (!cell) return; // line not present in the current view/mode
+    const line = c.endLine || c.startLine;
+    const cell = findAnchorCell(c.filePath, c.side, line);
+    if (!cell) {
+      // line hidden in a collapsed gap (or absent in this mode): park the
+      // thread and ask review.js to reveal the line
+      pending.set(c.id, { c, replies });
+      if (reveal)
+        document.dispatchEvent(
+          new CustomEvent('prequel:reveal-line', {
+            detail: { filePath: c.filePath, side: c.side, line },
+          })
+        );
+      return;
+    }
     const row = cell.closest('tr');
     const isSplit = isSplitTable(cell.closest('table'));
     insertionPointAfter(row).insertAdjacentHTML('afterend', commentRowHtml(c, isSplit, replies));
@@ -430,6 +445,7 @@
   }
 
   function removeAllCommentEls() {
+    pending.clear();
     document
       .querySelectorAll('.comment-row, .file-comment, .file-comment-compose')
       .forEach((el) => el.remove());
@@ -652,6 +668,14 @@
       es.dataset_seen = true;
     });
   }
+
+  document.addEventListener('prequel:context-loaded', (e) => {
+    for (const [id, { c, replies }] of pending) {
+      if (c.filePath !== e.detail.filePath) continue;
+      pending.delete(id);
+      renderComment(c, replies, { reveal: false });
+    }
+  });
 
   loadComments();
   connectEvents();

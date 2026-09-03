@@ -109,10 +109,6 @@ function renderUnifiedLine(line) {
   return '';
 }
 
-// SVG "unfold" icon shown in the hunk-header gutter to expand context.
-const EXPAND_ICON =
-  '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8.177.677l2.896 2.896a.25.25 0 0 1-.177.427H8.75v1.25a.75.75 0 0 1-1.5 0V4H5.104a.25.25 0 0 1-.177-.427L7.823.677a.25.25 0 0 1 .354 0ZM7.25 10.75a.75.75 0 0 1 1.5 0V12h2.146a.25.25 0 0 1 .177.427l-2.896 2.896a.25.25 0 0 1-.354 0l-2.896-2.896A.25.25 0 0 1 5.104 12H7.25v-1.25Zm-5-2a.75.75 0 0 0 0-1.5h-.5a.75.75 0 0 0 0 1.5h.5ZM6 8a.75.75 0 0 1-.75.75h-.5a.75.75 0 0 1 0-1.5h.5A.75.75 0 0 1 6 8Zm2.25.75a.75.75 0 0 0 0-1.5h-.5a.75.75 0 0 0 0 1.5h.5ZM12 8a.75.75 0 0 1-.75.75h-.5a.75.75 0 0 1 0-1.5h.5A.75.75 0 0 1 12 8Zm2.25.75a.75.75 0 0 0 0-1.5h-.5a.75.75 0 0 0 0 1.5h.5Z"></path></svg>';
-
 // Line numbers reached at the end of a hunk (for computing the gap above the
 // next hunk).
 function hunkNewEnd(hunk) {
@@ -131,16 +127,14 @@ function hunkOldEnd(hunk) {
 function boundaryAttrs(ctx, gapStart, gapEnd, offset) {
   return (
     ` data-expander data-path="${escapeHtml(ctx.path)}" data-rev="${ctx.rev}"` +
-    ` data-gap-start-new="${gapStart}" data-gap-end-new="${gapEnd}" data-offset="${offset}"` +
-    ` data-new-start="${gapEnd + 1}" data-old-start="${gapEnd + 1 + offset}" data-prev-new-end="${gapStart - 1}"`
+    ` data-gap-start-new="${gapStart}" data-gap-end-new="${gapEnd}" data-offset="${offset}"`
   );
 }
 
+// The gutter is empty here; the client fills it with up/down/all buttons from
+// the gap attributes.
 function boundaryRow(attrs, header, { split, trailing = false }) {
-  const gutter = attrs
-    ? `<button class="expander" title="Expand context" aria-label="Expand context">${EXPAND_ICON}</button>`
-    : '';
-  const gutterCell = `<td class="blob-num blob-num-hunk blob-num-expand" colspan="${split ? 1 : 2}">${gutter}</td>`;
+  const gutterCell = `<td class="blob-num blob-num-hunk blob-num-expand" colspan="${split ? 1 : 2}"></td>`;
   const codeCol = `<td class="blob-code blob-code-hunk"${split ? ' colspan="3"' : ''}>${escapeHtml(header)}</td>`;
   const cls = trailing ? 'hunk-header-row boundary-trailing' : 'hunk-header-row';
   return `<tr class="${cls}"${attrs}>${gutterCell}${codeCol}</tr>`;

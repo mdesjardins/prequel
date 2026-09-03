@@ -38,72 +38,128 @@ function escapeHtml(s) {
     .replace(/>/g, '&gt;');
 }
 
-// Build a context (unchanged) row matching the current table layout.
+const ADD_COMMENT_BTN =
+  '<button class="add-comment" tabindex="-1" title="Add a comment" aria-label="Add a comment">+</button>';
+
+// Build a context (unchanged) row matching the current table layout. The new
+// side carries the same commentable gutter contract as server-rendered rows.
 function contextRow(split, oldNo, newNo, inner) {
   const code =
     '<td class="blob-code blob-code-context"><span class="blob-code-inner">' +
     '<span class="marker"> </span>' + inner + '</span></td>';
   const numOld = `<td class="blob-num blob-num-context" data-line-number="${oldNo}"></td>`;
-  const numNew = `<td class="blob-num blob-num-context" data-line-number="${newNo}"></td>`;
+  const numNew =
+    `<td class="blob-num blob-num-context commentable" data-side="new"` +
+    ` data-comment-line="${newNo}" data-line-number="${newNo}">${ADD_COMMENT_BTN}</td>`;
   return split
     ? `<tr class="context-loaded">${numOld}${code}${numNew}${code}</tr>`
     : `<tr class="context-loaded">${numOld}${numNew}${code}</tr>`;
 }
 
-function disableExpander(row) {
-  row.removeAttribute('data-expander');
-  const btn = row.querySelector('.expander');
-  if (btn) btn.remove();
-}
-
 const CHUNK = 20;
 
-async function expandContext(btn) {
-  const row = btn.closest('tr[data-expander]');
-  if (!row || row.dataset.loading) return;
-  const { path, rev } = row.dataset;
-  const newStart = parseInt(row.dataset.newStart, 10);
-  const oldStart = parseInt(row.dataset.oldStart, 10);
-  const prevNewEnd = parseInt(row.dataset.prevNewEnd, 10) || 0;
-  const offset = oldStart - newStart; // oldNo = newNo + offset (constant in a gap)
-  const gapEndNew = newStart - 1;
-  const bounded = prevNewEnd > 0; // gap between two hunks (fully known)
-  const gapStartNew = bounded ? prevNewEnd + 1 : Math.max(1, gapEndNew - CHUNK + 1);
-  if (gapEndNew < gapStartNew) {
-    disableExpander(row);
-    return;
-  }
+const ICONS = {
+  up: '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M7.823 1.677 4.927 4.573A.25.25 0 0 0 5.104 5H7.25v3.236a.75.75 0 1 0 1.5 0V5h2.146a.25.25 0 0 0 .177-.427L8.177 1.677a.25.25 0 0 0-.354 0ZM13.75 11a.75.75 0 0 0 0 1.5h.5a.75.75 0 0 0 0-1.5h-.5Zm-3.75.75a.75.75 0 0 1 .75-.75h.5a.75.75 0 0 1 0 1.5h-.5a.75.75 0 0 1-.75-.75ZM7.75 11a.75.75 0 0 0 0 1.5h.5a.75.75 0 0 0 0-1.5h-.5ZM4 11.75a.75.75 0 0 1 .75-.75h.5a.75.75 0 0 1 0 1.5h-.5a.75.75 0 0 1-.75-.75ZM1.75 11a.75.75 0 0 0 0 1.5h.5a.75.75 0 0 0 0-1.5h-.5Z"></path></svg>',
+  down: '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8.177 14.323l2.896-2.896a.25.25 0 0 0-.177-.427H8.75V7.764a.75.75 0 1 0-1.5 0V11H5.104a.25.25 0 0 0-.177.427l2.896 2.896a.25.25 0 0 0 .354 0ZM2.25 5a.75.75 0 0 0 0-1.5h-.5a.75.75 0 0 0 0 1.5h.5ZM6 4.25a.75.75 0 0 1-.75.75h-.5a.75.75 0 0 1 0-1.5h.5a.75.75 0 0 1 .75.75ZM8.25 5a.75.75 0 0 0 0-1.5h-.5a.75.75 0 0 0 0 1.5h.5ZM12 4.25a.75.75 0 0 1-.75.75h-.5a.75.75 0 0 1 0-1.5h.5a.75.75 0 0 1 .75.75ZM14.25 5a.75.75 0 0 0 0-1.5h-.5a.75.75 0 0 0 0 1.5h.5Z"></path></svg>',
+  all: '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8.177.677l2.896 2.896a.25.25 0 0 1-.177.427H8.75v1.25a.75.75 0 0 1-1.5 0V4H5.104a.25.25 0 0 1-.177-.427L7.823.677a.25.25 0 0 1 .354 0ZM7.25 10.75a.75.75 0 0 1 1.5 0V12h2.146a.25.25 0 0 1 .177.427l-2.896 2.896a.25.25 0 0 1-.354 0l-2.896-2.896A.25.25 0 0 1 5.104 12H7.25v-1.25Zm-5-2a.75.75 0 0 0 0-1.5h-.5a.75.75 0 0 0 0 1.5h.5ZM6 8a.75.75 0 0 1-.75.75h-.5a.75.75 0 0 1 0-1.5h.5A.75.75 0 0 1 6 8Zm2.25.75a.75.75 0 0 0 0-1.5h-.5a.75.75 0 0 0 0 1.5h.5ZM12 8a.75.75 0 0 1-.75.75h-.5a.75.75 0 0 1 0-1.5h.5A.75.75 0 0 1 12 8Zm2.25.75a.75.75 0 0 0 0-1.5h-.5a.75.75 0 0 0 0 1.5h.5Z"></path></svg>',
+};
+const TITLES = { up: 'Expand up', down: 'Expand down', all: 'Expand all' };
 
+function gapOf(row) {
+  const start = parseInt(row.dataset.gapStartNew, 10);
+  const end = parseInt(row.dataset.gapEndNew, 10);
+  return { start, end, size: end - start + 1 };
+}
+
+function boundaryDirs(row) {
+  const { start, size } = gapOf(row);
+  if (row.classList.contains('boundary-trailing')) return ['down'];
+  if (start === 1) return ['up'];
+  return size <= CHUNK ? ['all'] : ['up', 'down'];
+}
+
+function decorateBoundary(row) {
+  const cell = row.querySelector('.blob-num-expand');
+  if (!cell) return;
+  const dirs = boundaryDirs(row);
+  cell.innerHTML = dirs
+    .map(
+      (d) =>
+        `<button class="expander" data-dir="${d}" title="${TITLES[d]}" aria-label="${TITLES[d]}">${ICONS[d]}</button>`
+    )
+    .join('');
+  cell.classList.toggle('blob-num-expand-2', dirs.length === 2);
+}
+
+document.querySelectorAll('tr[data-expander]').forEach(decorateBoundary);
+
+function rowsFromHtml(html) {
+  const tbody = document.createElement('tbody');
+  tbody.innerHTML = html;
+  return [...tbody.children];
+}
+
+// Reveal part of the hidden gap a boundary row stands for. Loaded rows sit
+// above the boundary row: "up" chunks stack upward from it (row.upTop tracks
+// the topmost one) and "down" chunks fill in above that block.
+async function expandBoundary(row, dir) {
+  if (!row.isConnected || row.dataset.loading) return;
+  const { start, end } = gapOf(row);
+  if (end < start) return row.remove();
+  let from = start;
+  let to = end;
+  if (dir === 'down') to = Math.min(end, start + CHUNK - 1);
+  else if (dir === 'up') from = Math.max(start, end - CHUNK + 1);
+
+  const { path, rev } = row.dataset;
+  const offset = parseInt(row.dataset.offset, 10) || 0;
   const split = row.closest('table').classList.contains('diff-table-split');
   row.dataset.loading = '1';
   try {
     const res = await fetch(
-      `/api/context?path=${encodeURIComponent(path)}&rev=${rev}` +
-        `&start=${gapStartNew}&end=${gapEndNew}`
+      `/api/context?path=${encodeURIComponent(path)}&rev=${rev}&start=${from}&end=${to}`
     );
     const data = await res.json();
     const lines = data.lines || [];
-    let frag = '';
-    lines.forEach((content, i) => {
-      const n = data.from + i;
-      const inner = data.html ? data.html[i] : escapeHtml(content);
-      frag += contextRow(split, n + offset, n, inner);
-    });
-    if (frag) row.insertAdjacentHTML('beforebegin', frag);
+    const html = lines
+      .map((content, i) => {
+        const n = data.from + i;
+        const inner = data.html ? data.html[i] : escapeHtml(content);
+        return contextRow(split, n + offset, n, inner);
+      })
+      .join('');
+    const rows = rowsFromHtml(html);
+    const anchor = row.upTop || row;
+    rows.forEach((r) => anchor.before(r));
+    if (dir === 'up' && rows.length) row.upTop = rows[0];
 
-    if (bounded || gapStartNew <= 1) {
-      disableExpander(row); // gap fully filled (or reached top of file)
-    } else {
-      // top-of-file: continue upward on the next click
-      row.dataset.newStart = String(gapStartNew);
-      row.dataset.oldStart = String(gapStartNew + offset);
-    }
+    if (dir === 'down') row.dataset.gapStartNew = String(to + 1);
+    else if (dir === 'up') row.dataset.gapEndNew = String(from - 1);
+    else row.dataset.gapStartNew = String(end + 1);
+    if (gapOf(row).size <= 0) row.remove();
+    else decorateBoundary(row);
+    document.dispatchEvent(
+      new CustomEvent('prequel:context-loaded', { detail: { filePath: path } })
+    );
   } catch {
     /* leave the expander in place so the user can retry */
   } finally {
     delete row.dataset.loading;
   }
 }
+
+// comments.js asks for a hidden line to be revealed (a thread anchors there).
+document.addEventListener('prequel:reveal-line', (e) => {
+  const { filePath, side, line } = e.detail;
+  const file = document.querySelector(`.file[data-path="${CSS.escape(filePath)}"]`);
+  if (!file) return;
+  for (const row of file.querySelectorAll('tr[data-expander]')) {
+    const { start, end } = gapOf(row);
+    const offset = parseInt(row.dataset.offset, 10) || 0;
+    const n = side === 'old' ? line - offset : line;
+    if (n >= start && n <= end) return expandBoundary(row, 'all');
+  }
+});
 
 // Keep --subnav-h in sync with the sticky subnav's real height (it changes if
 // the header wraps), so sticky file headers and the tree pane offset correctly.
@@ -200,7 +256,7 @@ document.addEventListener('click', (e) => {
   const expander = e.target.closest('.expander');
   if (expander) {
     e.preventDefault();
-    expandContext(expander);
+    expandBoundary(expander.closest('tr[data-expander]'), expander.dataset.dir);
     return;
   }
 

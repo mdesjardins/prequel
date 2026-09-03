@@ -770,7 +770,7 @@ body {
 }
 
 .expander {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
   width: 100%;
@@ -790,6 +790,15 @@ body {
 
 .expander svg {
   fill: currentColor;
+}
+
+/* two stacked arrows when a gap is bigger than one chunk */
+.blob-num-expand-2 .expander {
+  height: 20px;
+}
+
+.boundary-trailing .blob-code-hunk {
+  min-height: 20px;
 }
 
 /* empty cells in split view (a side with no corresponding line) */
