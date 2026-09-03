@@ -76,11 +76,17 @@ URL params (all optional): `?view=split|unified` picks the layout,
 persists), `?base=<ref>` overrides the base branch, `?mode=light|dark` forces a
 color mode (default follows the OS).
 
+Hunk boundaries carry GitHub-style expanders (up, down, or all for small gaps,
+20 lines a click), including one after the last hunk. Each file header has
+**Expand all** / **Collapse** and **View file**, which opens the whole file at
+`/file/<path>` with a tree of the repository on the left. Files in the diff
+accept comments there too, on any line.
+
 ## Layout
 
 ```
 bin/prequel.js             CLI entry (port selection, browser launch, repo resolution)
-src/server.js             Express app + routes (/ and /api/context)
+src/server.js             Express app + routes (/, /file/*, /api/context, /api/comments)
 src/git/gitService.js     git CLI wrapper: refs, diff generation, blob lines
 src/git/diffParser.js     raw patch text -> diff model
 src/render/renderer.js    diff model -> GitHub-faithful HTML (unified + split)
@@ -89,8 +95,11 @@ src/render/wordDiff.js    intra-line (word-level) diff ranges
 src/comments/commentStore.js  per-repo comment persistence (~/.prequel)
 src/export/claudeExport.js    build markdown/JSON export payload
 src/sampleDiff.js         built-in sample diff (fallback outside a repo)
-views/review.ejs          page shell (loads Primer tokens + diff.css)
+views/review.ejs          review page shell
+views/file.ejs            whole-file page with repository tree
+views/partials/head.ejs   shared <head> (Primer tokens + diff.css)
 public/css/diff.css       GitHub "Files changed" clone
-public/js/review.js       toggles, collapse/expand, copy path, Viewed, hunk expansion
+public/js/review.js       toggles, collapse/expand, copy path, Viewed, context expansion
+public/js/tree-pane.js    file-tree pane: show/hide, resize, folder collapse
 public/js/comments.js     hover-+, compose, inject threads, delete
 ```

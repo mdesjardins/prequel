@@ -1,13 +1,73 @@
 <!doctype html>
-<html lang="en" data-color-mode="<%= colorMode %>" data-branch="<%= branch %>" data-comments-enabled="<%= commentable ? '1' : '0' %>">
-<head>
-  <meta charset="utf-8">
-  <title><%= path %> · prequel</title>
-</head>
+<html
+  lang="en"
+  data-color-mode="<%= colorMode %>"
+  data-light-theme="light"
+  data-dark-theme="dark"
+  data-diff="<%= diffMode %>"
+  data-branch="<%= branch %>"
+  data-comments-enabled="<%= commentable ? '1' : '0' %>"
+>
+<%- include('partials/head', { title: `${path} — ${head}` }) %>
 <body data-back-href="<%= backHref %>" data-deleted="<%= isDeleted ? '1' : '0' %>" data-plain="<%= plain ? '1' : '0' %>">
-  <a href="<%= backHref %>">Back to review</a>
-  <nav class="crumbs"><%= repoPath.split('/').pop() %><% for (const c of crumbs) { %> / <%= c %><% } %></nav>
-  <aside class="file-tree-pane"><nav class="file-tree"><%- treeHtml %></nav></aside>
-  <main><%- tableHtml %></main>
+  <header class="pr-subnav">
+    <div class="pr-subnav-inner">
+      <div class="pr-title-row">
+        <button class="tree-pane-toggle" title="Toggle file tree" aria-label="Toggle file tree">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25H5V1.5Zm4.75 0v13h7.75a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25Z"></path></svg>
+        </button>
+        <a class="back-link" href="<%= backHref %>">← Back to review</a>
+        <nav class="crumbs" aria-label="Breadcrumb">
+          <span class="crumb crumb-repo"><%= repoPath.split('/').pop() %></span>
+          <% crumbs.forEach((c, i) => { %>
+          <span class="crumb-sep">/</span>
+          <span class="crumb<%= i === crumbs.length - 1 ? ' crumb-file' : '' %>"><%= c %></span>
+          <% }) %>
+        </nav>
+        <span class="pr-refs">
+          <span class="ref-pill"><%= head %></span>
+          <span class="ref-arrow">into</span>
+          <span class="ref-pill"><%= base %></span>
+        </span>
+      </div>
+      <div class="pr-meta-row">
+        <span class="diff-summary">
+          <% if (isBinary) { %>
+            Binary file
+          <% } else { %>
+            <strong><%= lineCount %></strong> <%= lineCount === 1 ? 'line' : 'lines' %>
+          <% } %>
+          <% if (isDeleted) { %>
+            <span class="file-notice file-notice-deleted">Deleted in this diff, showing base version</span>
+          <% } %>
+          <% if (plain) { %>
+            <span class="file-notice">Syntax highlighting off for files over 5,000 lines</span>
+          <% } %>
+          <% if (!commentable && !isDeleted && !isBinary) { %>
+            <span class="file-notice">Not in this diff, read-only</span>
+          <% } %>
+        </span>
+        <span class="pr-meta-right">
+          <span class="repo-path" title="<%= repoPath %>"><%= repoPath %></span>
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <div class="review-layout">
+    <aside class="file-tree-pane" aria-label="Repository files">
+      <div class="tree-header">Repository</div>
+      <nav class="file-tree"><%- treeHtml %></nav>
+    </aside>
+    <div class="tree-resizer" role="separator" aria-orientation="vertical" aria-label="Resize file pane" title="Drag to resize"></div>
+    <main class="diff-container">
+      <%- tableHtml %>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/static/js/tree-pane.js"></script>
+  <script src="/static/js/comments.js"></script>
 </body>
 </html>

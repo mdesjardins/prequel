@@ -102,3 +102,24 @@ test('huge file skips highlighting', async () => {
   const small = (await get('src/cart.js')).body;
   assert.ok(small.includes('class="tok"'));
 });
+
+test('page shell: back link, escaped crumbs, tree, comments flag', async () => {
+  const changed = (await get('src/format.js', '?diff=working')).body;
+  assert.ok(changed.includes('class="back-link"'));
+  assert.ok(/href="\/\?[^"]*#diff-[0-9a-f]{12}"/.test(changed));
+  assert.ok(changed.includes('data-comments-enabled="1"'));
+  assert.ok(changed.includes('class="tree-header">Repository'));
+  assert.ok(changed.includes('/static/js/tree-pane.js'));
+
+  const unchanged = (await get('src/cart.js', '?diff=working')).body;
+  assert.ok(unchanged.includes('data-comments-enabled="0"'));
+  assert.ok(!/class="back-link" href="[^"]*#diff-/.test(unchanged));
+
+  const deleted = (await get('src/old.js', '?diff=branch')).body;
+  assert.ok(deleted.includes('data-comments-enabled="0"'));
+  assert.ok(deleted.includes('Deleted in this diff'));
+
+  const evil = (await get('%3Cimg%20src%3Dx%20onerror%3D1%3E/x.js', '?diff=working')).body;
+  assert.ok(!evil.includes('<img src=x onerror=1>'));
+  assert.ok(evil.includes('&lt;img src=x onerror=1&gt;'));
+});
