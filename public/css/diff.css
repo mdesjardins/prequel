@@ -1419,4 +1419,96 @@ body {
   border-radius: 10px;
   padding: 0 6px;
   font-weight: 600;
+/* --- composer: saved replies popover, image attachments ------------------ */
+.composer-bar {
+  position: relative;
+}
+.composer-saved-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 5;
+  min-width: 220px;
+  max-width: 320px;
+  display: block;
+  padding: 4px;
+  margin-top: 4px;
+  border: 1px solid var(--borderColor-default, #d0d7de);
+  border-radius: 6px;
+  background-color: var(--overlay-bgColor, var(--bgColor-default, #fff));
+  box-shadow: var(--shadow-floating-small, 0 8px 24px rgba(31, 35, 40, 0.12));
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+}
+.composer-saved-menu[hidden] {
+  display: none;
+}
+.composer-saved-menu:focus {
+  outline: none;
+}
+.composer-saved-row {
+  display: flex;
+  align-items: stretch;
+}
+.composer-saved-item {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  text-align: left;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--fgColor-default, #1f2328);
+  padding: 5px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.composer-saved-item:hover,
+.composer-saved-item:focus,
+.composer-saved-add:hover,
+.composer-saved-add:focus {
+  background-color: var(--bgColor-muted, #f6f8fa);
+  outline: none;
+}
+.composer-saved-del {
+  font: inherit;
+  width: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--fgColor-muted, #59636e);
+  cursor: pointer;
+}
+.composer-saved-del:hover,
+.composer-saved-del:focus {
+  color: var(--fgColor-danger, #d1242f);
+  background-color: var(--bgColor-muted, #f6f8fa);
+  outline: none;
+}
+.composer-saved-empty {
+  padding: 5px 8px;
+}
+.composer-saved-add {
+  font: inherit;
+  font-size: 12px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-top: 1px solid var(--borderColor-default, #d0d7de);
+  border-radius: 0 0 6px 6px;
+  background: none;
+  padding: 6px 8px;
+  margin-top: 4px;
+  color: var(--fgColor-accent, #0969da);
+  cursor: pointer;
+}
+.composer-notice {
+  padding: 4px 0 6px;
+}
+.comment-input.is-dragover {
+  outline: 2px dashed var(--borderColor-accent-emphasis, #0969da);
+  outline-offset: -2px;
+  background-color: var(--bgColor-accent-muted, #ddf4ff);
 }
