@@ -1219,3 +1219,113 @@ body {
 .tree-status-unchanged {
   background-color: transparent;
 }
+
+/* --- composer: tabs, toolbar, preview ------------------------------------ */
+.comment-compose {
+  border: 1px solid var(--borderColor-default, #d1d9e0);
+  border-radius: 6px;
+  background-color: var(--bgColor-default, #fff);
+  padding: 8px;
+}
+.composer-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fgColor-default, #1f2328);
+  margin: 0 0 6px;
+}
+.composer-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--borderColor-default, #d1d9e0);
+  margin-bottom: 8px;
+}
+.composer-tabs {
+  display: flex;
+}
+.composer-tab {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border: 0;
+  background: none;
+  color: var(--fgColor-muted, #59636e);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.composer-tab.is-active {
+  color: var(--fgColor-default, #1f2328);
+  font-weight: 600;
+  border-bottom-color: var(--underlineNav-borderColor-active, #fd8c73);
+}
+.composer-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding-bottom: 4px;
+}
+.composer-tool {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--fgColor-muted, #59636e);
+  cursor: pointer;
+}
+.composer-tool svg {
+  fill: currentColor;
+}
+.composer-tool:hover {
+  background-color: var(--bgColor-muted, #f6f8fa);
+  color: var(--fgColor-default, #1f2328);
+}
+.composer-sep {
+  width: 1px;
+  height: 16px;
+  background-color: var(--borderColor-default, #d1d9e0);
+  margin: 0 4px;
+}
+.comment-preview {
+  min-height: 68px;
+  padding: 8px;
+  font-size: 14px;
+  border-bottom: 1px solid var(--borderColor-default, #d1d9e0);
+}
+.composer-muted {
+  color: var(--fgColor-muted, #59636e);
+  font-size: 12px;
+}
+.composer-error {
+  color: var(--fgColor-danger, #d1242f);
+  font-size: 12px;
+}
+.composer-hints {
+  margin-right: auto;
+  font-size: 11px;
+  color: var(--fgColor-muted, #59636e);
+  align-self: center;
+}
+.composer-saved-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 0;
+}
+.composer-saved-item {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 8px;
+  border: 1px solid var(--borderColor-default, #d1d9e0);
+  border-radius: 6px;
+  background-color: var(--bgColor-muted, #f6f8fa);
+  color: var(--fgColor-default, #1f2328);
+  cursor: pointer;
+}

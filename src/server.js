@@ -28,11 +28,20 @@ import {
 import { buildMarkdown, buildJson } from './export/claudeExport.js';
 import { marked } from 'marked';
 
-marked.setOptions({ breaks: true });
+const escapeHtml = (s) =>
+  String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+const mdRenderer = new marked.Renderer();
+mdRenderer.html = (html) => escapeHtml(html);
+marked.setOptions({ breaks: true, renderer: mdRenderer });
+
+export function renderMarkdown(body) {
+  return marked.parse(body || '');
+}
 
 // Add rendered markdown (bodyHtml) for the client to display.
 function withHtml(c) {
-  return { ...c, bodyHtml: marked.parse(c.body || '') };
+  return { ...c, bodyHtml: renderMarkdown(c.body) };
 }
 
 // Best-effort: add ".prequel/" to the repo's local git exclude so exported
@@ -292,6 +301,12 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
   });
 
   // --- review comments ---------------------------------------------------
+  app.post('/api/preview', (req, res) => {
+    const b = req.body || {};
+    if (typeof b.body !== 'string') return res.status(400).json({ error: 'bad params' });
+    res.json({ html: renderMarkdown(b.body) });
+  });
+
   app.get('/api/comments', async (req, res) => {
     if (!repoRoot) return res.json({ comments: [] });
     const branch = req.query.branch ? String(req.query.branch) : null;

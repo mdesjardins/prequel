@@ -103,15 +103,8 @@
     return `<div class="comment-thread${cls}" data-root-id="${root.id}">${cards.join('')}</div>`;
   }
 
-  function composeInner() {
-    return (
-      `<form class="comment-compose">` +
-      `<textarea class="comment-input" rows="3" placeholder="Leave a comment. Markdown supported."></textarea>` +
-      `<div class="comment-compose-actions">` +
-      `<button type="button" class="btn comment-cancel">Cancel</button>` +
-      `<button type="submit" class="btn btn-primary">Comment</button>` +
-      `</div></form>`
-    );
+  function composeInner(anchor) {
+    return window.prequelComposer.html(anchor);
   }
 
   // Unified spans the code column (colspan 3); split confines the thread to the
@@ -215,7 +208,11 @@
     const at = insertionPointAfter(cell.closest('tr'));
     at.insertAdjacentHTML(
       'afterend',
-      `<tr class="comment-row comment-compose-row">${threadCells(isSplit, side, composeInner())}</tr>`
+      `<tr class="comment-row comment-compose-row">${threadCells(
+        isSplit,
+        side,
+        composeInner({ kind: 'line', side, startLine: lo, endLine: hi, filePath })
+      )}</tr>`
     );
     const composeRow = at.nextElementSibling;
     Object.assign(composeRow.dataset, {
@@ -235,7 +232,10 @@
     const container = fileEl.querySelector('.file-comments');
     let compose = container.querySelector('.file-comment-compose');
     if (!compose) {
-      container.insertAdjacentHTML('beforeend', `<div class="file-comment-compose">${composeInner()}</div>`);
+      container.insertAdjacentHTML(
+        'beforeend',
+        `<div class="file-comment-compose">${composeInner({ kind: 'file', filePath })}</div>`
+      );
       compose = container.querySelector('.file-comment-compose');
       Object.assign(compose.dataset, { filePath, side: 'file', startLine: '0', endLine: '0', snapshot: '[]' });
       setFormContext(compose);
@@ -253,6 +253,7 @@
       endLine: container.dataset.endLine,
       snapshot: container.dataset.snapshot,
     });
+    window.prequelComposer.mount(form);
   }
 
   async function submitCompose(form) {
@@ -560,9 +561,17 @@
       if (!compose) {
         thread.insertAdjacentHTML(
           'beforeend',
-          `<div class="comment-reply-compose">${composeInner()}</div>`
+          `<div class="comment-reply-compose">${composeInner({ kind: 'reply' })}</div>`
         );
         compose = thread.querySelector('.comment-reply-compose');
+        const root = thread.closest('.comment-row, .file-comment');
+        Object.assign(compose.querySelector('.comment-compose').dataset, {
+          filePath: root?.dataset.filePath || '',
+          side: root?.dataset.side || '',
+          startLine: root?.dataset.line || '0',
+          endLine: root?.dataset.line || '0',
+        });
+        window.prequelComposer.mount(compose.querySelector('.comment-compose'));
       }
       compose.querySelector('.comment-input').focus();
       return;
