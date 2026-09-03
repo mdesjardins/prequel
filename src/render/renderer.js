@@ -128,22 +128,42 @@ function hunkOldEnd(hunk) {
   return hunk.oldStart - 1;
 }
 
-// A hunk-header row. `expandable` puts an expander in the gutter and metadata
-// on the row so the client can fetch the gap above this hunk.
-function hunkHeaderRow(hunk, ctx, prevNewEnd, { split }) {
-  const gapAbove = hunk.newStart - 1 - prevNewEnd; // >0 when there's hidden context
-  const expandable = ctx.rev && gapAbove > 0;
-  const data = expandable
-    ? ` data-expander data-path="${escapeHtml(ctx.path)}" data-rev="${ctx.rev}"` +
-      ` data-new-start="${hunk.newStart}" data-old-start="${hunk.oldStart}"` +
-      ` data-prev-new-end="${prevNewEnd}"`
-    : '';
-  const gutter = expandable
+function boundaryAttrs(ctx, gapStart, gapEnd, offset) {
+  return (
+    ` data-expander data-path="${escapeHtml(ctx.path)}" data-rev="${ctx.rev}"` +
+    ` data-gap-start-new="${gapStart}" data-gap-end-new="${gapEnd}" data-offset="${offset}"` +
+    ` data-new-start="${gapEnd + 1}" data-old-start="${gapEnd + 1 + offset}" data-prev-new-end="${gapStart - 1}"`
+  );
+}
+
+function boundaryRow(attrs, header, { split, trailing = false }) {
+  const gutter = attrs
     ? `<button class="expander" title="Expand context" aria-label="Expand context">${EXPAND_ICON}</button>`
     : '';
   const gutterCell = `<td class="blob-num blob-num-hunk blob-num-expand" colspan="${split ? 1 : 2}">${gutter}</td>`;
-  const codeCol = `<td class="blob-code blob-code-hunk"${split ? ' colspan="3"' : ''}>${escapeHtml(hunk.header)}</td>`;
-  return `<tr class="hunk-header-row"${data}>${gutterCell}${codeCol}</tr>`;
+  const codeCol = `<td class="blob-code blob-code-hunk"${split ? ' colspan="3"' : ''}>${escapeHtml(header)}</td>`;
+  const cls = trailing ? 'hunk-header-row boundary-trailing' : 'hunk-header-row';
+  return `<tr class="${cls}"${attrs}>${gutterCell}${codeCol}</tr>`;
+}
+
+// A hunk-header row. When there is hidden context above the hunk the row
+// carries the gap's new-side range and old/new offset for the client.
+function hunkHeaderRow(hunk, ctx, prevNewEnd, { split }) {
+  const gapAbove = hunk.newStart - 1 - prevNewEnd;
+  const attrs =
+    ctx.rev && gapAbove > 0
+      ? boundaryAttrs(ctx, prevNewEnd + 1, hunk.newStart - 1, hunk.oldStart - hunk.newStart)
+      : '';
+  return boundaryRow(attrs, hunk.header, { split });
+}
+
+function trailingRow(file, ctx, { split }) {
+  const last = file.hunks[file.hunks.length - 1];
+  if (!last || !ctx.rev || file.status === 'removed') return '';
+  const newEnd = hunkNewEnd(last);
+  if (!(file.newLineCount > newEnd)) return '';
+  const attrs = boundaryAttrs(ctx, newEnd + 1, file.newLineCount, hunkOldEnd(last) - newEnd);
+  return boundaryRow(attrs, '', { split, trailing: true });
 }
 
 function renderUnifiedTable(file, ctx) {
@@ -154,6 +174,7 @@ function renderUnifiedTable(file, ctx) {
     rows += hunk.lines.map(renderUnifiedLine).join('');
     prevNewEnd = hunkNewEnd(hunk);
   }
+  rows += trailingRow(file, ctx, { split: false });
   return (
     '<table class="diff-table diff-table-unified">' +
     '<colgroup><col class="col-num"><col class="col-num"><col class="col-code"></colgroup>' +
@@ -224,6 +245,7 @@ function renderSplitTable(file, ctx) {
     rows += renderSplitHunkBody(hunk);
     prevNewEnd = hunkNewEnd(hunk);
   }
+  rows += trailingRow(file, ctx, { split: true });
   return (
     '<table class="diff-table diff-table-split">' +
     '<colgroup><col class="col-num"><col class="col-code"><col class="col-num"><col class="col-code"></colgroup>' +

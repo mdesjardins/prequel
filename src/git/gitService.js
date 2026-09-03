@@ -120,18 +120,28 @@ export async function getDiff(repoRoot, { base, mode = 'all' } = {}) {
 // all/working modes, including uncommitted edits); otherwise `git show rev:path`.
 // start/end are 1-based inclusive. `eof` is true when `end` reached past the
 // last line, so the caller can stop offering further downward expansion.
-export async function getBlobLines(repoRoot, { rev, path: filePath, start, end }) {
-  let content;
+async function readBlob(repoRoot, rev, filePath) {
   if (rev === 'WORKTREE') {
     const abs = path.join(repoRoot, filePath);
     // guard against path traversal escaping the repo
-    if (!abs.startsWith(path.resolve(repoRoot) + path.sep)) return { lines: [], eof: true };
-    content = await fs.readFile(abs, 'utf8').catch(() => '');
-  } else {
-    content = await git(repoRoot, ['show', `${rev}:${filePath}`]).catch(() => '');
+    if (!abs.startsWith(path.resolve(repoRoot) + path.sep)) return '';
+    return fs.readFile(abs, 'utf8').catch(() => '');
   }
+  return git(repoRoot, ['show', `${rev}:${filePath}`]).catch(() => '');
+}
+
+function splitLines(content) {
   const all = content.split('\n');
   if (all.length && all[all.length - 1] === '') all.pop(); // drop trailing newline artifact
+  return all;
+}
+
+export async function getLineCount(repoRoot, { rev, path: filePath }) {
+  return splitLines(await readBlob(repoRoot, rev, filePath)).length;
+}
+
+export async function getBlobLines(repoRoot, { rev, path: filePath, start, end }) {
+  const all = splitLines(await readBlob(repoRoot, rev, filePath));
   const from = Math.max(1, start);
   const lines = all.slice(from - 1, end);
   return { lines, from, eof: end >= all.length };

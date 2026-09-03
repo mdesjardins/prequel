@@ -5,7 +5,7 @@ import fs from 'node:fs/promises';
 import { renderDiff, renderFileTree } from './render/renderer.js';
 import { highlightDiff, highlightLines } from './render/highlighter.js';
 import { annotateWordDiffs } from './render/wordDiff.js';
-import { getDiff, getBlobLines } from './git/gitService.js';
+import { getDiff, getBlobLines, getLineCount } from './git/gitService.js';
 import { parseDiff, inferLanguage } from './git/diffParser.js';
 import { sampleDiff } from './sampleDiff.js';
 import {
@@ -103,6 +103,15 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     // Which revision the "new" side comes from, for context expansion:
     // branch mode diffs against HEAD; all/working show the working tree.
     const rev = repoRoot && diffMode === 'branch' ? 'HEAD' : 'WORKTREE';
+    if (repoRoot) {
+      await Promise.all(
+        diff.files
+          .filter((f) => !f.isBinary && f.status !== 'removed')
+          .map(async (f) => {
+            f.newLineCount = await getLineCount(repoRoot, { rev, path: f.newPath });
+          })
+      );
+    }
     const { filesHtml, summary } = renderDiff(diff, { view, rev });
     const treeHtml = diff.files.length ? renderFileTree(diff) : '';
     res.render('review', {
