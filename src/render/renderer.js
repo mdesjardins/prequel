@@ -134,7 +134,7 @@ function hunkHeaderRow(hunk, ctx, prevNewEnd, { split }) {
   const gapAbove = hunk.newStart - 1 - prevNewEnd; // >0 when there's hidden context
   const expandable = ctx.rev && gapAbove > 0;
   const data = expandable
-    ? ` data-expander data-path="${escapeHtml(ctx.path)}" data-rev="${ctx.rev}"` +
+    ? ` data-expander data-path="${escapeHtml(ctx.path)}" data-rev="${escapeHtml(ctx.rev)}"` +
       ` data-new-start="${hunk.newStart}" data-old-start="${hunk.oldStart}"` +
       ` data-prev-new-end="${prevNewEnd}"`
     : '';
@@ -146,6 +146,22 @@ function hunkHeaderRow(hunk, ctx, prevNewEnd, { split }) {
   return `<tr class="hunk-header-row"${data}>${gutterCell}${codeCol}</tr>`;
 }
 
+// A trailing row after a file's last hunk, so the context down to the end of
+// the file can be fetched too.  `data-tail` tells the client to extend
+// downward from new-start, a chunk a click, rather than fill a gap above; it
+// removes the row once the blob ends.
+function tailExpanderRow(file, ctx, { split }) {
+  if (!ctx.rev || !file.hunks.length || file.status === 'removed') return '';
+  const last = file.hunks[file.hunks.length - 1];
+  const data =
+    ` data-expander data-tail data-path="${escapeHtml(ctx.path)}" data-rev="${escapeHtml(ctx.rev)}"` +
+    ` data-new-start="${hunkNewEnd(last) + 1}" data-old-start="${hunkOldEnd(last) + 1}"`;
+  const gutter = `<button class="expander" title="Expand context" aria-label="Expand context">${EXPAND_ICON}</button>`;
+  const gutterCell = `<td class="blob-num blob-num-hunk blob-num-expand" colspan="${split ? 1 : 2}">${gutter}</td>`;
+  const codeCol = `<td class="blob-code blob-code-hunk"${split ? ' colspan="3"' : ''}></td>`;
+  return `<tr class="hunk-header-row hunk-tail-row"${data}>${gutterCell}${codeCol}</tr>`;
+}
+
 function renderUnifiedTable(file, ctx) {
   let prevNewEnd = 0;
   let rows = '';
@@ -154,6 +170,7 @@ function renderUnifiedTable(file, ctx) {
     rows += hunk.lines.map(renderUnifiedLine).join('');
     prevNewEnd = hunkNewEnd(hunk);
   }
+  rows += tailExpanderRow(file, ctx, { split: false });
   return (
     '<table class="diff-table diff-table-unified">' +
     '<colgroup><col class="col-num"><col class="col-num"><col class="col-code"></colgroup>' +
@@ -224,6 +241,7 @@ function renderSplitTable(file, ctx) {
     rows += renderSplitHunkBody(hunk);
     prevNewEnd = hunkNewEnd(hunk);
   }
+  rows += tailExpanderRow(file, ctx, { split: true });
   return (
     '<table class="diff-table diff-table-split">' +
     '<colgroup><col class="col-num"><col class="col-code"><col class="col-num"><col class="col-code"></colgroup>' +
@@ -270,6 +288,7 @@ function renderFile(file, view, rev) {
         </button>
         ${statusLabel}
       </span>
+      <button class="expand-all" title="Expand the whole file" aria-label="Expand the whole file">${EXPAND_ICON}</button>
       <button class="add-file-comment" title="Comment on this file" aria-label="Comment on this file">
         <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M1 2.75C1 1.784 1.784 1 2.75 1h10.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 13.25 12H9.06l-2.573 2.573A1.458 1.458 0 0 1 4 13.543V12H2.75A1.75 1.75 0 0 1 1 10.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h2a.75.75 0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h4.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"></path></svg>
       </button>

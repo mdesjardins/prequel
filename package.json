@@ -21,7 +21,9 @@
     "src",
     "views",
     "public",
-    "skills"
+    "skills",
+    "docs",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=18"

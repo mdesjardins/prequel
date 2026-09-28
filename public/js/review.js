@@ -23,6 +23,7 @@ function goToParam(param, value) {
     if (params.has(param)) continue; // explicit choice in URL wins
     const saved = localStorage.getItem('prequel:' + param);
     const rendered = document.documentElement.getAttribute('data-' + param);
+    if (rendered === 'compare') continue; // two files compared: no changes-to-show mode applies
     if (saved && saved !== rendered) {
       params.set(param, saved);
       changed = true;
@@ -58,9 +59,12 @@ function disableExpander(row) {
 
 const CHUNK = 20;
 
+// Returns true when it made progress (rows inserted, or the gap found filled),
+// false when the fetch failed and the expander was left for a retry.
 async function expandContext(btn) {
   const row = btn.closest('tr[data-expander]');
-  if (!row || row.dataset.loading) return;
+  if (!row || row.dataset.loading) return false;
+  if (row.dataset.tail !== undefined) return expandTail(row);
   const { path, rev } = row.dataset;
   const newStart = parseInt(row.dataset.newStart, 10);
   const oldStart = parseInt(row.dataset.oldStart, 10);
@@ -71,14 +75,14 @@ async function expandContext(btn) {
   const gapStartNew = bounded ? prevNewEnd + 1 : Math.max(1, gapEndNew - CHUNK + 1);
   if (gapEndNew < gapStartNew) {
     disableExpander(row);
-    return;
+    return true;
   }
 
   const split = row.closest('table').classList.contains('diff-table-split');
   row.dataset.loading = '1';
   try {
     const res = await fetch(
-      `/api/context?path=${encodeURIComponent(path)}&rev=${rev}` +
+      `api/context?path=${encodeURIComponent(path)}&rev=${rev}` +
         `&start=${gapStartNew}&end=${gapEndNew}`
     );
     const data = await res.json();
@@ -89,7 +93,12 @@ async function expandContext(btn) {
       const inner = data.html ? data.html[i] : escapeHtml(content);
       frag += contextRow(split, n + offset, n, inner);
     });
-    if (frag) row.insertAdjacentHTML('beforebegin', frag);
+    // Above the chunks this expander loaded before, not between them and it:
+    // expanding upward twice must read 1-6, 7-26, not 7-26, 1-6.  A bounded
+    // gap fills in one fetch, so there it is the row itself.
+    let anchor = row;
+    while (anchor.previousElementSibling?.classList.contains('context-loaded')) anchor = anchor.previousElementSibling;
+    if (frag) anchor.insertAdjacentHTML('beforebegin', frag);
 
     if (bounded || gapStartNew <= 1) {
       disableExpander(row); // gap fully filled (or reached top of file)
@@ -98,10 +107,60 @@ async function expandContext(btn) {
       row.dataset.newStart = String(gapStartNew);
       row.dataset.oldStart = String(gapStartNew + offset);
     }
+    return true;
   } catch {
-    /* leave the expander in place so the user can retry */
+    return false; /* leave the expander in place so the user can retry */
   } finally {
     delete row.dataset.loading;
+  }
+}
+
+// The tail row (after a file's last hunk) extends the file downward, CHUNK
+// lines a click, and goes away once the blob ends.
+async function expandTail(row) {
+  const { path, rev } = row.dataset;
+  const newStart = parseInt(row.dataset.newStart, 10);
+  const oldStart = parseInt(row.dataset.oldStart, 10);
+  const offset = oldStart - newStart;
+  const split = row.closest('table').classList.contains('diff-table-split');
+  row.dataset.loading = '1';
+  try {
+    const res = await fetch(
+      `api/context?path=${encodeURIComponent(path)}&rev=${rev}` +
+        `&start=${newStart}&end=${newStart + CHUNK - 1}`
+    );
+    const data = await res.json();
+    const lines = data.lines || [];
+    let frag = '';
+    lines.forEach((content, i) => {
+      const n = data.from + i;
+      const inner = data.html ? data.html[i] : escapeHtml(content);
+      frag += contextRow(split, n + offset, n, inner);
+    });
+    if (frag) row.insertAdjacentHTML('beforebegin', frag);
+    if (data.eof || !lines.length) {
+      row.remove(); // the file is shown to its end
+    } else {
+      row.dataset.newStart = String(newStart + lines.length);
+      row.dataset.oldStart = String(oldStart + lines.length);
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    delete row.dataset.loading;
+  }
+}
+
+// "Expand the whole file": work every expander in the file until none is
+// left, so the file reads in full with its changes in place.  Bounded gaps
+// fill in one fetch; the top-of-file and tail rows re-arm a chunk at a time
+// until they reach an end.  Stops at the first failed fetch.
+async function expandAll(fileEl) {
+  for (let guard = 0; guard < 5000; guard++) {
+    const btn = fileEl.querySelector('tr[data-expander] .expander');
+    if (!btn) return;
+    if (!(await expandContext(btn))) return;
   }
 }
 
@@ -196,6 +255,15 @@ function setTreeWidth(px) {
 })();
 
 document.addEventListener('click', (e) => {
+  // Expand the whole file
+  const expandAllBtn = e.target.closest('.expand-all');
+  if (expandAllBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    expandAll(expandAllBtn.closest('.file'));
+    return;
+  }
+
   // Hunk context expander
   const expander = e.target.closest('.expander');
   if (expander) {
@@ -232,6 +300,7 @@ document.addEventListener('click', (e) => {
   const segBtn = e.target.closest('.seg-btn');
   if (segBtn) {
     e.preventDefault();
+    if (segBtn.classList.contains('is-disabled')) return;
     goToParam(segBtn.getAttribute('data-param'), segBtn.getAttribute('data-value'));
     return;
   }
@@ -288,4 +357,14 @@ document.querySelectorAll('.viewed-checkbox').forEach((cb) => {
     cb.closest('.file').classList.toggle('is-collapsed', cb.checked);
     markTreeViewed(id, cb.checked);
   });
+});
+
+// Branch picker: review any local branch straight from git. Dropping `base`
+// lets the branch's recorded review base (if any) apply.
+document.getElementById('branch-picker')?.addEventListener('change', (e) => {
+  const params = new URLSearchParams(location.search);
+  params.set('branch', e.target.value);
+  params.delete('base');
+  params.set('diff', 'branch');
+  location.search = params.toString();
 });

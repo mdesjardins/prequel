@@ -37,6 +37,8 @@ Then run it from inside any git repo:
 prequel [repoPath] [--base <ref>] [--port <n>] [--no-open]
 ```
 
+Every option, with examples: [docs/cli.md](docs/cli.md).
+
 ## Closing the loop with your agent
 
 Instead of copy/pasting the export, install the bundled skill so Claude Code can read your comments straight from the running server and resolve each one as it
@@ -59,3 +61,13 @@ The page updates live over an event stream, so comments resolve and Claude's rep
 A comment whose line no longer exists after a change isn't lost — it moves to the top of its file marked **Outdated**, noting the line it used to point at.
 
 Claude can reply in a thread as well as resolve it, which is where it explains a decision or says why it *didn't* make a change.
+
+## Documentation
+
+- [Command line](docs/cli.md): every option, with examples, including serving
+  behind a reverse proxy.
+- [HTTP API](docs/http-api.md): the page's URL parameters -- review any branch,
+  compare two files -- and the JSON API and event stream an agent uses.
+- [Architecture](docs/architecture.md): how the source is laid out and how a
+  page is built.
+- [Changelog](CHANGELOG.md).

@@ -571,6 +571,28 @@ body {
   color: var(--fgColor-muted, #59636e);
 }
 
+/* "Expand the whole file", in the file header beside the comment button */
+.expand-all {
+  display: inline-flex;
+  border: 0;
+  background: transparent;
+  padding: 2px;
+  cursor: pointer;
+  color: var(--fgColor-muted, #59636e);
+  border-radius: 4px;
+}
+.expand-all:hover {
+  background-color: var(--bgColor-neutral-muted, #eff2f5);
+  color: var(--fgColor-default, #1f2328);
+}
+.expand-all svg {
+  fill: currentColor;
+}
+/* the tail expander row has no hunk header text; keep its height */
+.hunk-tail-row .blob-code-hunk {
+  min-height: 20px;
+}
+
 .copy-path {
   display: inline-flex;
   border: 0;
@@ -1134,3 +1156,8 @@ body {
   color: var(--fgColor-onEmphasis, #fff);
   background-color: var(--bgColor-attention-emphasis, #9a6700);
 }
+
+/* ?branch= reviews: the picker sits where the head pill was; modes that need
+   a working tree are disabled when the reviewed branch is not checked out. */
+.branch-picker { font: inherit; cursor: pointer; max-width: 28em; }
+.seg-btn.is-disabled { opacity: 0.4; cursor: not-allowed; pointer-events: auto; }

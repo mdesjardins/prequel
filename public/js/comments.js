@@ -265,7 +265,7 @@
     if (!body) return;
     form.querySelectorAll('button').forEach((b) => (b.disabled = true));
     try {
-      const res = await fetch('/api/comments', {
+      const res = await fetch('api/comments', {
         method: 'POST',
         headers: jsonHeaders(),
         body: JSON.stringify({
@@ -311,7 +311,7 @@
   async function removeComment(card) {
     const id = card.dataset.commentId;
     try {
-      await fetch(`/api/comments/${id}`, { method: 'DELETE', headers: clientHeaders() });
+      await fetch(`api/comments/${id}`, { method: 'DELETE', headers: clientHeaders() });
       dropComment(id);
     } catch {
       /* leave it in place on failure */
@@ -320,7 +320,7 @@
 
   async function setStatus(id, status) {
     try {
-      const res = await fetch(`/api/comments/${id}`, {
+      const res = await fetch(`api/comments/${id}`, {
         method: 'PATCH',
         headers: jsonHeaders(),
         body: JSON.stringify({ status }),
@@ -348,7 +348,7 @@
     if (!body || !thread) return;
     form.querySelectorAll('button').forEach((b) => (b.disabled = true));
     try {
-      const res = await fetch('/api/comments', {
+      const res = await fetch('api/comments', {
         method: 'POST',
         headers: jsonHeaders(),
         body: JSON.stringify({ parentId: thread.dataset.rootId, body }),
@@ -407,7 +407,7 @@
   async function loadComments() {
     let comments = [];
     try {
-      const res = await fetch(`/api/comments?branch=${encodeURIComponent(branch)}`);
+      const res = await fetch(`api/comments?branch=${encodeURIComponent(branch)}`);
       ({ comments } = await res.json());
     } catch {
       return;
@@ -434,7 +434,7 @@
     if (commentCount === 0) return;
     exportBtn.disabled = true;
     try {
-      const res = await fetch('/api/export', {
+      const res = await fetch('api/export', {
         method: 'POST',
         headers: jsonHeaders(),
         body: JSON.stringify({ branch, format: 'md' }),
@@ -469,7 +469,7 @@
     if (commentCount === 0) return;
     if (clearBtn) clearBtn.disabled = true;
     try {
-      const res = await fetch('/api/comments/clear', {
+      const res = await fetch('api/comments/clear', {
         method: 'POST',
         headers: jsonHeaders(),
         body: JSON.stringify({ branch }),
@@ -486,7 +486,7 @@
 
   async function undoClear() {
     try {
-      const res = await fetch('/api/comments/restore', { method: 'POST', headers: clientHeaders() });
+      const res = await fetch('api/comments/restore', { method: 'POST', headers: clientHeaders() });
       const { restored } = await res.json();
       if (!restored) return;
       removeAllCommentEls();
@@ -688,7 +688,7 @@
     // ?live=0 opts out — useful when a tool (or a headless browser) needs the
     // page to finish loading rather than hold a stream open.
     if (new URLSearchParams(location.search).get('live') === '0') return;
-    const es = new EventSource('/api/events');
+    const es = new EventSource('api/events');
     es.addEventListener('message', (e) => {
       try {
         applyRemote(JSON.parse(e.data));

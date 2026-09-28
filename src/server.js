@@ -5,7 +5,18 @@ import fs from 'node:fs/promises';
 import { renderDiff, renderFileTree } from './render/renderer.js';
 import { highlightDiff, highlightLines } from './render/highlighter.js';
 import { annotateWordDiffs } from './render/wordDiff.js';
-import { getDiff, getBlobLines, repoFingerprint } from './git/gitService.js';
+import {
+  getDiff,
+  getBlobLines,
+  getHead,
+  getBranches,
+  getReviewBase,
+  getGitCommonDir,
+  resolveRef,
+  repoFingerprint,
+  resolveBlobSpec,
+  getBlobPairDiff,
+} from './git/gitService.js';
 import { parseDiff, inferLanguage } from './git/diffParser.js';
 import { sampleDiff } from './sampleDiff.js';
 import {
@@ -52,36 +63,135 @@ const projectRoot = path.resolve(__dirname, '..');
 
 const DIFF_MODES = ['all', 'branch', 'working'];
 
-export function createServer({ repoRoot = null, defaultBase = null } = {}) {
+/**
+ * The prequel app: the review page and its JSON API over one repository
+ * (docs/http-api.md).  The CLI builds one per run; the package does not yet
+ * offer it as a library API.
+ *
+ * @param {object} [options]
+ * @param {string|null} [options.repoRoot] The repository's top level; null serves the built-in sample diff.
+ * @param {string|null} [options.defaultBase] The base ref when neither ?base= nor a branch's review base names one (--base).
+ * @param {'all'|'branch'|'working'|null} [options.defaultDiff] The mode a page opened without ?diff= shows (--diff); 'working' when unset.
+ * @param {string} [options.basePath] '' or '/prefix': every route mounts under it, and /healthz at the root too (--base-path).
+ * @param {string|null} [options.staticDir] A directory served at '/' beside the app; needs basePath (--static).
+ * @returns {import('express').Express} The app, to listen() on.
+ */
+export function createServer({ repoRoot = null, defaultBase = null, defaultDiff = null, basePath = '', staticDir = null } = {}) {
+  // The mode a bare '/' renders; ?diff= on the URL always wins.
+  const fallbackDiff = DIFF_MODES.includes(defaultDiff) ? defaultDiff : 'working';
   const app = express();
+  // Every page and API route lives under basePath ('' at the root), so the app
+  // can sit behind a reverse proxy at https://host/diffs/ unchanged.
+  const router = express.Router();
 
   app.set('view engine', 'ejs');
   app.set('views', path.join(projectRoot, 'views'));
 
   app.use(express.json({ limit: '1mb' }));
-  app.use('/static', express.static(path.join(projectRoot, 'public')));
-  app.use(
+  router.use('/static', express.static(path.join(projectRoot, 'public')));
+  router.use(
     '/vendor/primer',
     express.static(path.join(projectRoot, 'node_modules/@primer/primitives/dist/css'))
   );
 
-  app.get('/', async (req, res) => {
+  // <base href> carries this request's query string, so a fragment link
+  // ('#diff-<id>' in the file tree) resolves to this very page and scrolls,
+  // instead of navigating to basePath/ without ?branch=... .
+  const baseHrefOf = (req) => {
+    const qIdx = req.originalUrl.indexOf('?');
+    return `${basePath}/${qIdx >= 0 ? req.originalUrl.slice(qIdx) : ''}`;
+  };
+
+  // ?a=<rev>:<path>&b=<rev>:<path> (&la=&lb= labels): two files compared as
+  // one, read-only -- comments belong to a branch, and this page has none.  b
+  // alone (or a alone) shows that file whole, as new.  The page is a branch
+  // review's: the same parse, highlighting and rendering, and context
+  // expansion reads b's side from b's commit.
+  async function renderCompare(req, res, { view, colorMode }) {
+    const label = (v) => (typeof v === 'string' && v ? v.slice(0, 120) : null);
+    let wantA = typeof req.query.a === 'string' && req.query.a ? req.query.a : null;
+    let wantB = typeof req.query.b === 'string' && req.query.b ? req.query.b : null;
+    let la = label(req.query.la);
+    let lb = label(req.query.lb);
+    if (!wantB) [wantA, wantB, la, lb] = [null, wantA, null, la];
+    const a = wantA ? await resolveBlobSpec(repoRoot, wantA) : null;
+    const b = await resolveBlobSpec(repoRoot, wantB);
+    let error = null;
+    if (!b) error = `Not a file in a commit: ${wantB}`;
+    else if (wantA && !a) error = `Not a file in a commit: ${wantA}`;
+    let diff = { files: [] };
+    let identical = false;
+    if (!error) {
+      try {
+        const result = await getBlobPairDiff(repoRoot, { a, b });
+        diff = parseDiff(result.patch);
+        identical = result.identical;
+      } catch (err) {
+        error = err.message;
+      }
+    }
+    annotateWordDiffs(diff);
+    await highlightDiff(diff);
+    const { filesHtml, summary } = renderDiff(diff, { view, rev: b ? b.rev : null });
+    res.render('review', {
+      repoPath: repoRoot,
+      isRepo: true,
+      base: a ? a.spec : '(nothing)',
+      head: b ? b.spec : wantB,
+      currentHead: await getHead(repoRoot),
+      pinned: true,
+      branches: [],
+      diffMode: 'compare',
+      colorMode,
+      view,
+      error,
+      filesHtml,
+      treeHtml: '',
+      summary,
+      commentsEnabled: false,
+      basePath,
+      baseHref: baseHrefOf(req),
+      compare: { a, b, la, lb, identical },
+    });
+  }
+
+  router.get('/', async (req, res) => {
     // ?view=split|unified (layout); ?mode=light|dark (color); default auto.
     const view = req.query.view === 'unified' ? 'unified' : 'split';
     const colorMode = ['light', 'dark'].includes(req.query.mode) ? req.query.mode : 'auto';
-    // ?diff=all|branch|working (which changes to show); ?base=<ref>.
-    const diffMode = DIFF_MODES.includes(req.query.diff) ? req.query.diff : 'working';
+    if (repoRoot && (req.query.a || req.query.b)) return renderCompare(req, res, { view, colorMode });
+    // ?branch=<ref>: review a branch other than the checked-out one, straight
+    // from git. Its working tree does not exist here, so the mode is 'branch'.
+    const currentHead = repoRoot ? await getHead(repoRoot) : null;
+    const wantRef = typeof req.query.branch === 'string' && req.query.branch ? req.query.branch : null;
+    let ref = null;
+    let refError = null;
+    if (repoRoot && wantRef && wantRef !== currentHead) {
+      ref = await resolveRef(repoRoot, wantRef);
+      if (!ref) refError = `Unknown branch: ${wantRef}`;
+    }
+    const pinned = Boolean(ref);
+    // ?diff=all|branch|working (which changes to show); ?base=<ref>. Without
+    // a base, a branch's recorded review base (fleet-review.sh sets one) wins
+    // over the server default.
+    let diffMode = DIFF_MODES.includes(req.query.diff) ? req.query.diff : fallbackDiff;
+    if (pinned) diffMode = 'branch';
+    const viewRef = ref || currentHead;
+    const reviewBase = repoRoot && viewRef ? await getReviewBase(repoRoot, viewRef) : null;
     const requestedBase =
-      (typeof req.query.base === 'string' && req.query.base ? req.query.base : null) || defaultBase;
+      (typeof req.query.base === 'string' && req.query.base ? req.query.base : null) ||
+      reviewBase ||
+      defaultBase;
+    const branches = repoRoot ? await getBranches(repoRoot) : [];
 
     let diff;
     let head;
     let base;
-    let error = null;
+    let error = refError;
 
     if (repoRoot) {
       try {
-        const result = await getDiff(repoRoot, { base: requestedBase, mode: diffMode });
+        const result = await getDiff(repoRoot, { base: requestedBase, mode: diffMode, ref });
         diff = parseDiff(result.patch);
         head = result.head;
         base = result.base;
@@ -102,14 +212,18 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     await highlightDiff(diff); // attaches per-line highlighted HTML in place
     // Which revision the "new" side comes from, for context expansion:
     // branch mode diffs against HEAD; all/working show the working tree.
-    const rev = repoRoot && diffMode === 'branch' ? 'HEAD' : 'WORKTREE';
+    const rev = repoRoot && diffMode === 'branch' ? ref || 'HEAD' : 'WORKTREE';
     const { filesHtml, summary } = renderDiff(diff, { view, rev });
     const treeHtml = diff.files.length ? renderFileTree(diff) : '';
+    const baseHref = baseHrefOf(req);
     res.render('review', {
       repoPath: repoRoot || process.cwd(),
       isRepo: Boolean(repoRoot),
       base,
       head,
+      currentHead,
+      pinned,
+      branches,
       diffMode,
       colorMode,
       view,
@@ -118,15 +232,22 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
       treeHtml,
       summary,
       commentsEnabled: Boolean(repoRoot),
+      basePath,
+      baseHref,
     });
   });
 
   // On-demand context lines for hunk expansion.
   // ?path=&rev=HEAD|WORKTREE&start=&end= (new-side line numbers, 1-based).
-  app.get('/api/context', async (req, res) => {
+  router.get('/api/context', async (req, res) => {
     if (!repoRoot) return res.status(400).json({ error: 'no repo' });
     const filePath = String(req.query.path || '');
-    const rev = req.query.rev === 'HEAD' ? 'HEAD' : 'WORKTREE';
+    const revParam = String(req.query.rev || 'WORKTREE');
+    let rev = 'WORKTREE';
+    if (revParam !== 'WORKTREE') {
+      rev = revParam === 'HEAD' ? 'HEAD' : await resolveRef(repoRoot, revParam);
+      if (!rev) return res.status(400).json({ error: 'bad rev' });
+    }
     const start = parseInt(req.query.start, 10);
     const end = parseInt(req.query.end, 10);
     if (!filePath || !Number.isFinite(start) || !Number.isFinite(end)) {
@@ -191,7 +312,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     }
   }
 
-  app.get('/api/events', (req, res) => {
+  router.get('/api/events', (req, res) => {
     res.writeHead(200, {
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache, no-transform',
@@ -217,7 +338,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
   });
 
   // --- review comments ---------------------------------------------------
-  app.get('/api/comments', async (req, res) => {
+  router.get('/api/comments', async (req, res) => {
     if (!repoRoot) return res.json({ comments: [] });
     const branch = req.query.branch ? String(req.query.branch) : null;
     // Optional filters; omit them all to get everything (what the UI wants).
@@ -233,7 +354,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     res.json({ comments: comments.map(withHtml) });
   });
 
-  app.post('/api/comments', async (req, res) => {
+  router.post('/api/comments', async (req, res) => {
     if (!repoRoot) return res.status(400).json({ error: 'no repo' });
     const b = req.body || {};
     const author = b.author === 'claude' ? 'claude' : 'user';
@@ -281,7 +402,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     res.json({ comment: withHtml(comment) });
   });
 
-  app.patch('/api/comments/:id', async (req, res) => {
+  router.patch('/api/comments/:id', async (req, res) => {
     if (!repoRoot) return res.status(400).json({ error: 'no repo' });
     const b = req.body || {};
     const patch = {};
@@ -293,7 +414,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     res.json({ comment: withHtml(comment) });
   });
 
-  app.delete('/api/comments/:id', async (req, res) => {
+  router.delete('/api/comments/:id', async (req, res) => {
     if (!repoRoot) return res.status(400).json({ error: 'no repo' });
     const removed = await deleteComment(repoRoot, req.params.id);
     if (removed) emit('comment.deleted', { id: req.params.id }, req);
@@ -301,7 +422,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
   });
 
   // Bulk clear (with undo) for a clean slate between review rounds.
-  app.post('/api/comments/clear', async (req, res) => {
+  router.post('/api/comments/clear', async (req, res) => {
     if (!repoRoot) return res.status(400).json({ error: 'no repo' });
     const branch = req.body?.branch ? String(req.body.branch) : null;
     const cleared = await clearComments(repoRoot, branch);
@@ -309,7 +430,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
     res.json({ cleared });
   });
 
-  app.post('/api/comments/restore', async (req, res) => {
+  router.post('/api/comments/restore', async (req, res) => {
     if (!repoRoot) return res.status(400).json({ error: 'no repo' });
     const restored = await restoreCleared(repoRoot);
     emit('comments.reset', {}, req);
@@ -318,7 +439,7 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
 
   // Build the Claude payload, write it to <repo>/.prequel/, and return it so the
   // client can also copy it to the clipboard.
-  app.post('/api/export', async (req, res) => {
+  router.post('/api/export', async (req, res) => {
     if (!repoRoot) return res.status(400).json({ error: 'no repo' });
     const branch = req.body?.branch ? String(req.body.branch) : null;
     const format = req.body?.format === 'json' ? 'json' : 'md';
@@ -346,7 +467,36 @@ export function createServer({ repoRoot = null, defaultBase = null } = {}) {
 
   // Identifies this server and the repo it serves, so a client scanning ports
   // can find the instance belonging to the repo it cares about.
-  app.get('/healthz', (req, res) => res.json({ ok: true, app: 'prequel', repoRoot }));
+  // Branches this server can review (?branch=), with any recorded review base.
+  router.get('/api/branches', async (req, res) => {
+    if (!repoRoot) return res.json({ branches: [] });
+    const current = await getHead(repoRoot);
+    const names = await getBranches(repoRoot);
+    const branches = [];
+    for (const name of names) {
+      branches.push({ name, current: name === current, reviewBase: await getReviewBase(repoRoot, name) });
+    }
+    res.json({ branches });
+  });
+
+  // gitCommonDir is shared by every worktree of the repository, so a client
+  // in any of them can tell this server is theirs; head is what is checked
+  // out here (the only branch whose working tree this server can show).
+  const healthz = async (req, res) => {
+    const gitCommonDir = repoRoot ? await getGitCommonDir(repoRoot) : null;
+    const head = repoRoot ? await getHead(repoRoot) : null;
+    res.json({ ok: true, app: 'prequel', repoRoot, gitCommonDir, head, basePath });
+  };
+  router.get('/healthz', healthz);
+  app.get('/healthz', healthz);
+  app.use(basePath || '/', router);
+  if (staticDir) {
+    // --static: a site at the root beside the app (under basePath), so one
+    // process serves both and the site's relative links to the app resolve.
+    app.use('/', express.static(path.resolve(staticDir)));
+  } else if (basePath) {
+    app.get('/', (req, res) => res.redirect(basePath + '/'));
+  }
 
   return app;
 }
